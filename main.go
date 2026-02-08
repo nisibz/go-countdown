@@ -773,7 +773,7 @@ func renderFilterPanel(m model) string {
 	for _, f := range filters {
 		prefix := "  "
 		if m.filter == f.mode {
-			prefix = ">"
+			prefix = "▶️"
 		}
 		fmt.Fprintf(&b, "%s %s %s\n", prefix, f.num, f.label)
 	}
@@ -793,7 +793,7 @@ func updateTableRows(m *model) {
 
 		// Determine status and calculate remaining
 		if t.Paused {
-			status = "⏸"
+			status = "⏸️"
 			remaining = t.Remaining
 			remainingText = formatDuration(remaining)
 			endTimeText = "(paused)"
@@ -805,7 +805,7 @@ func updateTableRows(m *model) {
 				elapsed := t.Duration - remaining
 				endTimeText = fmt.Sprintf("+%s", formatDuration(elapsed))
 			} else {
-				status = "⏳"
+				status = "⏳️"
 				remainingText = formatDuration(remaining)
 				endTimeText = formatEndTime(t.End, m.now)
 			}
@@ -859,13 +859,13 @@ func (m model) View() string {
 		if m.editing {
 			b.WriteString("✏️  Edit Timer\n\n")
 		} else {
-			b.WriteString("➕ Add Timer\n\n")
+			b.WriteString("➕️ Add Timer\n\n")
 		}
 
 		for i, field := range m.inputFields {
-			cursor := " "
+			cursor := "  "
 			if i == m.activeField {
-				cursor = ">"
+				cursor = "▶️"
 			}
 			fmt.Fprintf(&b, "%s %s: %s\n", cursor, field.label, field.value)
 		}
