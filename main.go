@@ -9,6 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type tickMsg time.Time
@@ -221,6 +223,7 @@ type model struct {
 	timers          []Timer
 	now             time.Time
 	cursor          int
+	table           table.Model
 
 	adding          bool
 	editing         bool  // true when editing existing timer
@@ -294,16 +297,37 @@ func formatDuration(d time.Duration) string {
 
 	// Calculate months and years for larger durations
 	years := days / 365
-	months := (days % 365) / 30
-	remainingDays := (days % 365) % 30
+	remainingDaysAfterYears := days % 365
+	months := remainingDaysAfterYears / 30
+	remainingDays := remainingDaysAfterYears % 30
 
 	var parts []string
 
+	// For large durations (> 60 days), show only top 2 units (years, months, or days)
+	// This keeps the display compact and prevents truncation
+	if days > 60 {
+		if years > 0 {
+			parts = append(parts, fmt.Sprintf("%dy", years))
+		}
+		if months > 0 {
+			parts = append(parts, fmt.Sprintf("%dmo", months))
+		}
+		if remainingDays > 0 && len(parts) < 2 {
+			parts = append(parts, fmt.Sprintf("%dd", remainingDays))
+		}
+		// Show at most 2 parts for long durations
+		if len(parts) > 2 {
+			parts = parts[:2]
+		}
+		return strings.Join(parts, " ")
+	}
+
+	// For shorter durations, show more detail
 	if years > 0 {
 		parts = append(parts, fmt.Sprintf("%dy", years))
 	}
 	if months > 0 {
-		parts = append(parts, fmt.Sprintf("%dm", months))
+		parts = append(parts, fmt.Sprintf("%dmo", months))
 	}
 	if remainingDays > 0 {
 		parts = append(parts, fmt.Sprintf("%dd", remainingDays))
@@ -339,6 +363,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.help.Width = msg.Width
+		// Adjust table width based on available space (filter panel takes 20 chars)
+		tableWidth := msg.Width - 25 // Leave room for filter panel + padding
+		m.table.SetWidth(tableWidth)
+		m.table.SetHeight(msg.Height - 5) // Leave room for help
 		return m, nil
 
 	case tea.KeyMsg:
@@ -485,8 +513,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			visibleTimers := m.getVisibleTimers()
 			if m.cursor > 0 {
 				m.cursor--
+				m.table.SetCursor(m.cursor)
 			} else if len(visibleTimers) == 0 {
 				m.cursor = 0
+				m.table.SetCursor(0)
 			}
 			return m, nil
 
@@ -494,6 +524,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			visibleTimers := m.getVisibleTimers()
 			if m.cursor < len(visibleTimers)-1 {
 				m.cursor++
+				m.table.SetCursor(m.cursor)
 			}
 			return m, nil
 
@@ -626,21 +657,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "1":
 			m.filter = filterAll
 			m.cursor = 0
+			m.table.SetCursor(0)
+			m.table.GotoTop()
 			return m, nil
 
 		case "2":
 			m.filter = filterActive
 			m.cursor = 0
+			m.table.SetCursor(0)
+			m.table.GotoTop()
 			return m, nil
 
 		case "3":
 			m.filter = filterPaused
 			m.cursor = 0
+			m.table.SetCursor(0)
+			m.table.GotoTop()
 			return m, nil
 
 		case "4":
 			m.filter = filterDone
 			m.cursor = 0
+			m.table.SetCursor(0)
+			m.table.GotoTop()
 			return m, nil
 
 		}
@@ -651,25 +690,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
-}
-
-func allDone(timers []Timer, now time.Time) bool {
-	for _, t := range timers {
-		if t.End.After(now) {
-			return false
-		}
-	}
-	return true
-}
-
-func activeCount(timers []Timer, now time.Time) int {
-	n := 0
-	for _, t := range timers {
-		if t.Paused || t.End.After(now) {
-			n++
-		}
-	}
-	return n
 }
 
 func (m model) getVisibleTimers() []Timer {
@@ -733,24 +753,66 @@ func renderFilterPanel(m model) string {
 	return b.String()
 }
 
-func renderStatusBar(m model) string {
-	filterLabel := ""
-	switch m.filter {
-	case filterAll:
-		filterLabel = "all"
-	case filterActive:
-		filterLabel = "active"
-	case filterPaused:
-		filterLabel = "paused"
-	case filterDone:
-		filterLabel = "done"
+// updateTableRows populates the table with timer data
+func updateTableRows(m *model) {
+	visibleTimers := m.getVisibleTimers()
+
+	var rows []table.Row
+	for _, t := range visibleTimers {
+		var status string
+		var remaining time.Duration
+		var remainingText string
+		var endTimeText string
+
+		// Determine status and calculate remaining
+		if t.Paused {
+			status = "⏸"
+			remaining = t.Remaining
+			remainingText = formatDuration(remaining)
+			endTimeText = "(paused)"
+		} else {
+			remaining = time.Until(t.End)
+			if remaining <= 0 {
+				status = "✅"
+				remainingText = "Done"
+				elapsed := t.Duration - remaining
+				endTimeText = fmt.Sprintf("+%s", formatDuration(elapsed))
+			} else {
+				status = "⏳"
+				remainingText = formatDuration(remaining)
+				endTimeText = formatEndTime(t.End, m.now)
+			}
+		}
+
+		// Truncate name if too long
+		name := t.Name
+		if len(name) > 20 {
+			name = name[:19] + "…"
+		}
+
+		row := table.Row{status, name, remainingText, endTimeText}
+		rows = append(rows, row)
 	}
-	return fmt.Sprintf(
-		"[%s] %d/%d active\n\n",
-		filterLabel,
-		activeCount(m.timers, m.now),
-		len(m.timers),
-	)
+
+	m.table.SetRows(rows)
+
+	// Sync cursor position
+	if m.cursor >= 0 && m.cursor < len(rows) {
+		m.table.SetCursor(m.cursor)
+	}
+}
+
+// formatEndTime formats the end time based on how far in the future it is
+func formatEndTime(end, now time.Time) string {
+	if end.Day() == now.Day() && end.Month() == now.Month() && end.Year() == now.Year() {
+		return end.Format("15:04:05")
+	} else if end.Month() == now.Month() && end.Year() == now.Year() {
+		return end.Format("2 15:04")
+	} else if end.Year() == now.Year() {
+		return end.Format("2/01 15:04")
+	} else {
+		return end.Format("2/01/06 15:04")
+	}
 }
 
 func (m model) View() string {
@@ -789,47 +851,15 @@ func (m model) View() string {
 	// Build filter panel
 	filterPanel := renderFilterPanel(m)
 
-	// Build timer list
-	var timersB strings.Builder
-	visibleTimers := m.getVisibleTimers()
+	// Update table rows with current timer data
+	updateTableRows(&m)
 
-	for i, t := range visibleTimers {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = "> "
-		}
+	// Build timer table
+	timerTable := m.table.View()
 
-		var remaining time.Duration
-		if t.Paused {
-			remaining = t.Remaining
-		} else {
-			remaining = time.Until(t.End)
-		}
-
-		if remaining <= 0 && !t.Paused {
-			fmt.Fprintf(&timersB, "%s✅ %s done (%s)\n", cursor, t.Name, formatDuration(t.Duration))
-		} else if t.Paused {
-			fmt.Fprintf(&timersB, "%s⏸ %s: %s (paused)\n", cursor, t.Name, formatDuration(remaining))
-		} else {
-			var endTime string
-			if t.End.Day() == m.now.Day() && t.End.Month() == m.now.Month() && t.End.Year() == m.now.Year() {
-				endTime = t.End.Format("15:04:05")
-			} else if t.End.Month() == m.now.Month() && t.End.Year() == m.now.Year() {
-				endTime = t.End.Format("2 15:04:05")
-			} else if t.End.Year() == m.now.Year() {
-				endTime = t.End.Format("2/01 15:04:05")
-			} else {
-				endTime = t.End.Format("2/01/06 15:04:05")
-			}
-			fmt.Fprintf(&timersB, "%s⏳ %s: %s (ends at %s)\n", cursor, t.Name, formatDuration(remaining), endTime)
-		}
-	}
-
-	timersB.WriteString("\n" + m.help.View(m.defaultKeys))
-
-	// Combine panels side by side
+	// Combine filter panel and table side by side
 	filterLines := strings.Split(filterPanel, "\n")
-	timerLines := strings.Split(timersB.String(), "\n")
+	timerLines := strings.Split(timerTable, "\n")
 
 	var b strings.Builder
 	maxFilterLines := len(filterLines)
@@ -847,10 +877,37 @@ func (m model) View() string {
 		}
 	}
 
+	b.WriteString("\n" + m.help.View(m.defaultKeys))
 	return b.String()
 }
 
 func initialModel() model {
+	// Define table columns
+	columns := []table.Column{
+		{Title: "Stat", Width: 6},
+		{Title: "Name", Width: 22},
+		{Title: "Remaining", Width: 17},
+		{Title: "End Time", Width: 17},
+	}
+
+	// Create table with styles
+	tbl := table.New(
+		table.WithColumns(columns),
+		table.WithFocused(true),
+		table.WithHeight(10), // Will be dynamic based on viewport
+	)
+
+	// Set table styles
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		Foreground(lipgloss.Color("15")).
+		Bold(true).
+		Underline(true)
+	s.Selected = s.Selected.
+		Foreground(lipgloss.Color("15")).
+		Background(lipgloss.Color("57"))
+	tbl.SetStyles(s)
+
 	m := model{
 		now:         time.Now(),
 		filter:      filterAll,
@@ -858,6 +915,7 @@ func initialModel() model {
 		formKeys:    newFormKeyMap(),
 		confirmKeys: newConfirmKeyMap(),
 		help:        help.New(),
+		table:       tbl,
 	}
 
 	if s, err := loadFromFile(); err == nil {
