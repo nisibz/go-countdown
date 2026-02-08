@@ -279,6 +279,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case "ctrl+k", "ctrl+up":
+			if m.cursor > 0 {
+				// Swap with previous timer
+				m.timers[m.cursor-1], m.timers[m.cursor] = m.timers[m.cursor], m.timers[m.cursor-1]
+				m.cursor--
+				m.dirty = true
+			}
+			return m, nil
+
+		case "ctrl+j", "ctrl+down":
+			if m.cursor < len(m.timers)-1 {
+				// Swap with next timer
+				m.timers[m.cursor], m.timers[m.cursor+1] = m.timers[m.cursor+1], m.timers[m.cursor]
+				m.cursor++
+				m.dirty = true
+			}
+			return m, nil
+
 		case "d":
 			if len(m.timers) == 0 {
 				return m, nil
@@ -467,7 +485,7 @@ func (m model) View() string {
 		}
 	}
 
-	b.WriteString("\n[a] add  [d] delete  [e] edit  [r] redo  [↑/↓] move  [p] pause  [q] quit\n")
+	b.WriteString("\n[a] add  [d] delete  [e] edit  [r] redo  [↑/↓] move  [Ctrl+↑/↓] reorder  [p] pause  [q] quit\n")
 	return b.String()
 }
 
