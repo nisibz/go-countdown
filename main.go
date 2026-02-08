@@ -14,6 +14,15 @@ import (
 type tickMsg time.Time
 
 // defaultKeyMap defines keybindings for the main timer view
+type filterMode int
+
+const (
+	filterAll filterMode = iota
+	filterActive
+	filterPaused
+	filterDone
+)
+
 type defaultKeyMap struct {
 	Up        key.Binding
 	Down      key.Binding
@@ -24,6 +33,10 @@ type defaultKeyMap struct {
 	Edit      key.Binding
 	Redo      key.Binding
 	Pause     key.Binding
+	Filter1   key.Binding
+	Filter2   key.Binding
+	Filter3   key.Binding
+	Filter4   key.Binding
 	Help      key.Binding
 	Quit      key.Binding
 }
@@ -38,6 +51,7 @@ func (k defaultKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.UpOrder, k.DownOrder},
 		{k.Add, k.Delete, k.Edit, k.Redo, k.Pause},
+		{k.Filter1, k.Filter2, k.Filter3, k.Filter4},
 		{k.Help, k.Quit},
 	}
 }
@@ -79,6 +93,22 @@ func newDefaultKeyMap() defaultKeyMap {
 		Pause: key.NewBinding(
 			key.WithKeys("p"),
 			key.WithHelp("p", "pause/resume"),
+		),
+		Filter1: key.NewBinding(
+			key.WithKeys("1"),
+			key.WithHelp("1", "show all"),
+		),
+		Filter2: key.NewBinding(
+			key.WithKeys("2"),
+			key.WithHelp("2", "show active"),
+		),
+		Filter3: key.NewBinding(
+			key.WithKeys("3"),
+			key.WithHelp("3", "show paused"),
+		),
+		Filter4: key.NewBinding(
+			key.WithKeys("4"),
+			key.WithHelp("4", "show done"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
@@ -194,9 +224,12 @@ type model struct {
 
 	adding          bool
 	editing         bool  // true when editing existing timer
+	editingIndex    int   // actual index of timer being edited
 	confirmingDelete bool // true when showing delete confirmation
 	inputFields     []inputField
 	activeField     int
+
+	filter filterMode
 
 	dirty bool
 	defaultKeys defaultKeyMap // key bindings for default view
@@ -346,11 +379,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err == nil && m.inputFields[0].value != "" {
 					if m.editing {
 						// Update existing timer
-						m.timers[m.cursor].Name = m.inputFields[0].value
-						m.timers[m.cursor].End = time.Now().Add(duration)
-						m.timers[m.cursor].Duration = duration
-						m.timers[m.cursor].Paused = false
-						m.timers[m.cursor].Remaining = 0
+						m.timers[m.editingIndex].Name = m.inputFields[0].value
+						m.timers[m.editingIndex].End = time.Now().Add(duration)
+						m.timers[m.editingIndex].Duration = duration
+						m.timers[m.editingIndex].Paused = false
+						m.timers[m.editingIndex].Remaining = 0
 					} else {
 						// Add new timer
 						newTimer := Timer{
@@ -359,7 +392,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							Duration: duration,
 						}
 						m.timers = append(m.timers, newTimer)
-						m.cursor = len(m.timers) - 1
+						visibleTimers := m.getVisibleTimers()
+						m.cursor = len(visibleTimers) - 1
 					}
 					m.dirty = true
 				}
@@ -426,8 +460,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "p":
-			if len(m.timers) > 0 {
-				t := &m.timers[m.cursor]
+			actualIdx := m.getActualTimerIndex(m.cursor)
+			if actualIdx >= 0 && len(m.timers) > 0 {
+				t := &m.timers[actualIdx]
 				if !t.Paused {
 					// Pause: only if timer is still running
 					if t.End.After(time.Now()) {
@@ -447,48 +482,61 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "up", "k":
+			visibleTimers := m.getVisibleTimers()
 			if m.cursor > 0 {
 				m.cursor--
+			} else if len(visibleTimers) == 0 {
+				m.cursor = 0
 			}
 			return m, nil
 
 		case "down", "j":
-			if m.cursor < len(m.timers)-1 {
+			visibleTimers := m.getVisibleTimers()
+			if m.cursor < len(visibleTimers)-1 {
 				m.cursor++
 			}
 			return m, nil
 
 		case "ctrl+k", "ctrl+up":
-			if m.cursor > 0 {
+			actualIdx := m.getActualTimerIndex(m.cursor)
+			if actualIdx > 0 {
 				// Swap with previous timer
-				m.timers[m.cursor-1], m.timers[m.cursor] = m.timers[m.cursor], m.timers[m.cursor-1]
-				m.cursor--
+				m.timers[actualIdx-1], m.timers[actualIdx] = m.timers[actualIdx], m.timers[actualIdx-1]
+				if m.cursor > 0 {
+					m.cursor--
+				}
 				m.dirty = true
 			}
 			return m, nil
 
 		case "ctrl+j", "ctrl+down":
-			if m.cursor < len(m.timers)-1 {
+			actualIdx := m.getActualTimerIndex(m.cursor)
+			if actualIdx < len(m.timers)-1 && actualIdx >= 0 {
 				// Swap with next timer
-				m.timers[m.cursor], m.timers[m.cursor+1] = m.timers[m.cursor+1], m.timers[m.cursor]
-				m.cursor++
+				m.timers[actualIdx], m.timers[actualIdx+1] = m.timers[actualIdx+1], m.timers[actualIdx]
+				visibleTimers := m.getVisibleTimers()
+				if m.cursor < len(visibleTimers)-1 {
+					m.cursor++
+				}
 				m.dirty = true
 			}
 			return m, nil
 
 		case "d":
-			if len(m.timers) == 0 {
+			actualIdx := m.getActualTimerIndex(m.cursor)
+			if actualIdx < 0 || len(m.timers) == 0 {
 				return m, nil
 			}
 
 			if m.confirmingDelete {
 				// Confirm delete
 				m.timers = append(
-					m.timers[:m.cursor],
-					m.timers[m.cursor+1:]...,
+					m.timers[:actualIdx],
+					m.timers[actualIdx+1:]...,
 				)
 
-				if m.cursor >= len(m.timers) && m.cursor > 0 {
+				visibleTimers := m.getVisibleTimers()
+				if m.cursor >= len(visibleTimers) && m.cursor > 0 {
 					m.cursor--
 				}
 
@@ -501,15 +549,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "y", "Y":
+			actualIdx := m.getActualTimerIndex(m.cursor)
 			if m.confirmingDelete {
 				// Confirm delete
-				if len(m.timers) > 0 {
+				if actualIdx >= 0 && len(m.timers) > 0 {
 					m.timers = append(
-						m.timers[:m.cursor],
-						m.timers[m.cursor+1:]...,
+						m.timers[:actualIdx],
+						m.timers[actualIdx+1:]...,
 					)
 
-					if m.cursor >= len(m.timers) && m.cursor > 0 {
+					visibleTimers := m.getVisibleTimers()
+					if m.cursor >= len(visibleTimers) && m.cursor > 0 {
 						m.cursor--
 					}
 
@@ -539,8 +589,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "r":
-			if len(m.timers) > 0 && m.timers[m.cursor].Duration > 0 {
-				t := &m.timers[m.cursor]
+			actualIdx := m.getActualTimerIndex(m.cursor)
+			if actualIdx >= 0 && len(m.timers) > 0 && m.timers[actualIdx].Duration > 0 {
+				t := &m.timers[actualIdx]
 				t.End = time.Now().Add(t.Duration)
 				t.Paused = false
 				t.Remaining = 0
@@ -550,14 +601,46 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "e":
-			if len(m.timers) > 0 {
+			actualIdx := m.getActualTimerIndex(m.cursor)
+			if actualIdx >= 0 && len(m.timers) > 0 {
 				m.editing = true
+				m.editingIndex = actualIdx
 				m.inputFields = []inputField{
-					{label: "Name", value: m.timers[m.cursor].Name},
-					{label: "Duration", value: formatDuration(m.timers[m.cursor].Duration)},
+					{label: "Name", value: m.timers[actualIdx].Name},
+					{label: "Duration", value: formatDuration(m.timers[actualIdx].Duration)},
 				}
 				m.activeField = 0
 			}
+			return m, nil
+
+		case "tab":
+			m.filter = (m.filter + 1) % 4
+			visibleTimers := m.getVisibleTimers()
+			if len(visibleTimers) == 0 {
+				m.cursor = 0
+			} else if m.cursor >= len(visibleTimers) {
+				m.cursor = len(visibleTimers) - 1
+			}
+			return m, nil
+
+		case "1":
+			m.filter = filterAll
+			m.cursor = 0
+			return m, nil
+
+		case "2":
+			m.filter = filterActive
+			m.cursor = 0
+			return m, nil
+
+		case "3":
+			m.filter = filterPaused
+			m.cursor = 0
+			return m, nil
+
+		case "4":
+			m.filter = filterDone
+			m.cursor = 0
 			return m, nil
 
 		}
@@ -589,9 +672,82 @@ func activeCount(timers []Timer, now time.Time) int {
 	return n
 }
 
+func (m model) getVisibleTimers() []Timer {
+	var result []Timer
+	for _, t := range m.timers {
+		switch m.filter {
+		case filterAll:
+			result = append(result, t)
+		case filterActive:
+			if !t.Paused && t.End.After(m.now) {
+				result = append(result, t)
+			}
+		case filterPaused:
+			if t.Paused {
+				result = append(result, t)
+			}
+		case filterDone:
+			if !t.Paused && !t.End.After(m.now) {
+				result = append(result, t)
+			}
+		}
+	}
+	return result
+}
+
+func (m model) getActualTimerIndex(visibleIndex int) int {
+	visibleTimers := m.getVisibleTimers()
+	if visibleIndex < 0 || visibleIndex >= len(visibleTimers) {
+		return -1
+	}
+	targetTimer := visibleTimers[visibleIndex]
+	for i, t := range m.timers {
+		if t.Name == targetTimer.Name && t.End.Equal(targetTimer.End) {
+			return i
+		}
+	}
+	return -1
+}
+
+func renderFilterPanel(m model) string {
+	filters := []struct {
+		num   string
+		label string
+		mode  filterMode
+	}{
+		{"1", "All", filterAll},
+		{"2", "Active", filterActive},
+		{"3", "Paused", filterPaused},
+		{"4", "Done", filterDone},
+	}
+
+	var b strings.Builder
+	b.WriteString(" Filters\n")
+	for _, f := range filters {
+		prefix := "  "
+		if m.filter == f.mode {
+			prefix = ">"
+		}
+		b.WriteString(fmt.Sprintf("%s %s %s\n", prefix, f.num, f.label))
+	}
+	return b.String()
+}
+
 func renderStatusBar(m model) string {
+	filterLabel := ""
+	switch m.filter {
+	case filterAll:
+		filterLabel = "all"
+	case filterActive:
+		filterLabel = "active"
+	case filterPaused:
+		filterLabel = "paused"
+	case filterDone:
+		filterLabel = "done"
+	}
 	return fmt.Sprintf(
-		"%d/%d active\n\n",
+		"[%s] %d/%d active\n\n",
+		filterLabel,
 		activeCount(m.timers, m.now),
 		len(m.timers),
 	)
@@ -599,11 +755,12 @@ func renderStatusBar(m model) string {
 
 func (m model) View() string {
 	if m.confirmingDelete {
+		actualIdx := m.getActualTimerIndex(m.cursor)
 		return fmt.Sprintf(
 			"🗑️  Delete Timer\n\n"+
 				"Delete \"%s\"?\n\n"+
 				"%s",
-			m.timers[m.cursor].Name,
+			m.timers[actualIdx].Name,
 			m.help.View(m.confirmKeys),
 		)
 	}
@@ -629,11 +786,14 @@ func (m model) View() string {
 		return b.String()
 	}
 
-	var b strings.Builder
+	// Build filter panel
+	filterPanel := renderFilterPanel(m)
 
-	b.WriteString(renderStatusBar(m))
+	// Build timer list
+	var timersB strings.Builder
+	visibleTimers := m.getVisibleTimers()
 
-	for i, t := range m.timers {
+	for i, t := range visibleTimers {
 		cursor := "  "
 		if i == m.cursor {
 			cursor = "> "
@@ -647,9 +807,9 @@ func (m model) View() string {
 		}
 
 		if remaining <= 0 && !t.Paused {
-			fmt.Fprintf(&b, "%s✅ %s done (%s)\n", cursor, t.Name, formatDuration(t.Duration))
+			fmt.Fprintf(&timersB, "%s✅ %s done (%s)\n", cursor, t.Name, formatDuration(t.Duration))
 		} else if t.Paused {
-			fmt.Fprintf(&b, "%s⏸ %s: %s (paused)\n", cursor, t.Name, formatDuration(remaining))
+			fmt.Fprintf(&timersB, "%s⏸ %s: %s (paused)\n", cursor, t.Name, formatDuration(remaining))
 		} else {
 			var endTime string
 			if t.End.Day() == m.now.Day() && t.End.Month() == m.now.Month() && t.End.Year() == m.now.Year() {
@@ -661,17 +821,39 @@ func (m model) View() string {
 			} else {
 				endTime = t.End.Format("2/01/06 15:04:05")
 			}
-			fmt.Fprintf(&b, "%s⏳ %s: %s (ends at %s)\n", cursor, t.Name, formatDuration(remaining), endTime)
+			fmt.Fprintf(&timersB, "%s⏳ %s: %s (ends at %s)\n", cursor, t.Name, formatDuration(remaining), endTime)
 		}
 	}
 
-	b.WriteString("\n" + m.help.View(m.defaultKeys))
+	timersB.WriteString("\n" + m.help.View(m.defaultKeys))
+
+	// Combine panels side by side
+	filterLines := strings.Split(filterPanel, "\n")
+	timerLines := strings.Split(timersB.String(), "\n")
+
+	var b strings.Builder
+	maxFilterLines := len(filterLines)
+	for i := 0; i < maxFilterLines || i < len(timerLines); i++ {
+		if i < len(filterLines) {
+			b.WriteString(fmt.Sprintf("%-20s", filterLines[i]))
+		} else {
+			b.WriteString(strings.Repeat(" ", 20))
+		}
+		if i < len(timerLines) {
+			b.WriteString(timerLines[i])
+		}
+		if i < maxFilterLines-1 || i < len(timerLines)-1 {
+			b.WriteString("\n")
+		}
+	}
+
 	return b.String()
 }
 
 func initialModel() model {
 	m := model{
 		now:         time.Now(),
+		filter:      filterAll,
 		defaultKeys: newDefaultKeyMap(),
 		formKeys:    newFormKeyMap(),
 		confirmKeys: newConfirmKeyMap(),
