@@ -31,7 +31,17 @@ func applySaveData(m *model, s saveData) {
 }
 
 func saveToFile(m model) error {
-	data := makeSaveData(m)
+	return saveTimers(m.timers)
+}
+
+func loadFromFile() (saveData, error) {
+	timers, err := loadTimers()
+	return saveData{Timers: timers}, err
+}
+
+// saveTimers saves timers directly (for CLI use)
+func saveTimers(timers []Timer) error {
+	data := saveData{Timers: timers}
 
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -45,14 +55,19 @@ func saveToFile(m model) error {
 	return os.WriteFile(saveFile, b, 0o644)
 }
 
-func loadFromFile() (saveData, error) {
+// loadTimers loads timers directly (for CLI use)
+func loadTimers() ([]Timer, error) {
 	var s saveData
 
 	b, err := os.ReadFile(saveFile)
 	if err != nil {
-		return s, err
+		return nil, err
 	}
 
 	err = json.Unmarshal(b, &s)
-	return s, err
+	if err != nil {
+		return nil, err
+	}
+
+	return s.Timers, nil
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 )
 
 type tickMsg time.Time
+type fileWatchMsg struct{}
 
 // defaultKeyMap defines keybindings for the main timer view
 type filterMode int
@@ -234,7 +236,8 @@ type model struct {
 
 	filter filterMode
 
-	dirty       bool
+	dirty           bool
+	lastModTime     time.Time // track file modification time for external changes
 	defaultKeys defaultKeyMap // key bindings for default view
 	formKeys    formKeyMap    // key bindings for form mode
 	confirmKeys confirmKeyMap // key bindings for delete confirmation
@@ -376,12 +379,18 @@ func formatDuration(d time.Duration) string {
 }
 
 func (m model) Init() tea.Cmd {
-	return tick()
+	return tea.Batch(tick(), fileWatchTick())
 }
 
 func tick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
+	})
+}
+
+func fileWatchTick() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return fileWatchMsg{}
 	})
 }
 
@@ -511,6 +520,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			if m.dirty {
 				_ = saveToFile(m)
+				// Update lastModTime to avoid triggering reload on our own save
+				if info, err := os.Stat(saveFile); err == nil {
+					m.lastModTime = info.ModTime()
+				}
 			}
 			return m, tea.Quit
 
@@ -713,7 +726,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.now = time.Time(msg)
-		return m, tick()
+		return m, tea.Batch(tick(), fileWatchTick())
+
+	case fileWatchMsg:
+		// Check if save file has been modified externally
+		if info, err := os.Stat(saveFile); err == nil {
+			modTime := info.ModTime()
+			if modTime.After(m.lastModTime) {
+				// File was modified externally, reload timers
+				if s, err := loadFromFile(); err == nil {
+					applySaveData(&m, s)
+					m.lastModTime = modTime
+				}
+			}
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -949,12 +976,380 @@ func initialModel() model {
 		applySaveData(&m, s)
 	}
 
+	// Get initial file modification time
+	if info, err := os.Stat(saveFile); err == nil {
+		m.lastModTime = info.ModTime()
+	}
+
 	return m
 }
 
+// CLI helper functions
+
+func printUsage() {
+	fmt.Println("go-countdown - Terminal countdown timer")
+	fmt.Println()
+	fmt.Println("USAGE:")
+	fmt.Println("  go-countdown              # Launch TUI interface")
+	fmt.Println("  go-countdown <command>    # Run CLI command")
+	fmt.Println()
+	fmt.Println("COMMANDS:")
+	fmt.Println("  add <name> <duration>           Add a new timer")
+	fmt.Println("  list [--filter]                 List timers (filter: --active, --paused, --done)")
+	fmt.Println("  pause [filter] <index>          Pause timer by 1-based index")
+	fmt.Println("  resume [filter] <index>         Resume timer by 1-based index")
+	fmt.Println("  delete [filter] <index>         Delete timer by 1-based index")
+	fmt.Println("  restart [filter] <index>        Restart timer by 1-based index")
+	fmt.Println("  edit [filter] <index> <name> <duration>  Edit timer")
+	fmt.Println("  help                            Show this help")
+	fmt.Println()
+	fmt.Println("DURATION FORMAT:")
+	fmt.Println("  30s    30 seconds")
+	fmt.Println("  5m     5 minutes")
+	fmt.Println("  1h     1 hour")
+	fmt.Println("  2d     2 days")
+	fmt.Println("  1y     1 year")
+	fmt.Println("  30d30m Compound: 30 days 30 minutes")
+	fmt.Println()
+	fmt.Println("EXAMPLES:")
+	fmt.Println("  go-countdown add \"Meeting\" 30m")
+	fmt.Println("  go-countdown add \"Project deadline\" 2d")
+	fmt.Println("  go-countdown list                    # List all timers")
+	fmt.Println("  go-countdown list --active           # List only active timers")
+	fmt.Println("  go-countdown pause 1                 # Pause first timer (from all)")
+	fmt.Println("  go-countdown pause --active 1        # Pause first active timer")
+	fmt.Println("  go-countdown resume --paused 2       # Resume second paused timer")
+	fmt.Println("  go-countdown delete --done 1         # Delete first done timer")
+	fmt.Println("  go-countdown delete 2                # Delete second timer (from all)")
+	fmt.Println("  go-countdown restart 1               # Restart first timer")
+}
+
+func parseFilterAndIndex(args []string) (filter, indexStr string, idx int) {
+	if len(args) == 0 {
+		return "", "", 0
+	}
+	if strings.HasPrefix(args[0], "--") {
+		filter = args[0]
+		if len(args) < 2 {
+			return filter, "", 0
+		}
+		indexStr = args[1]
+	} else {
+		indexStr = args[0]
+	}
+	var err error
+	idx, err = strconv.Atoi(indexStr)
+	if err != nil || idx < 1 {
+		return filter, indexStr, 0
+	}
+	return filter, indexStr, idx
+}
+
+func getFilteredTimers(timers []Timer, filter string) []Timer {
+	now := time.Now()
+	var result []Timer
+	for _, t := range timers {
+		switch filter {
+		case "--active":
+			if !t.Paused && t.End.After(now) {
+				result = append(result, t)
+			}
+		case "--paused":
+			if t.Paused {
+				result = append(result, t)
+			}
+		case "--done":
+			if !t.Paused && !t.End.After(now) {
+				result = append(result, t)
+			}
+		default:
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
+func resolveIndex(timers []Timer, filter string, idx int) (int, error) {
+	if idx < 1 {
+		return -1, fmt.Errorf("index must be >= 1")
+	}
+	filtered := getFilteredTimers(timers, filter)
+	if idx > len(filtered) {
+		return -1, fmt.Errorf("index %d out of range (filter shows %d timer(s))", idx, len(filtered))
+	}
+	targetTimer := filtered[idx-1]
+	for i, t := range timers {
+		if t.Name == targetTimer.Name && t.End.Equal(targetTimer.End) {
+			return i, nil
+		}
+	}
+	return -1, fmt.Errorf("timer not found")
+}
+
+func formatEndTimeCLI(end, now time.Time) string {
+	if end.Day() == now.Day() && end.Month() == now.Month() && end.Year() == now.Year() {
+		return end.Format("15:04:05")
+	} else if end.Month() == now.Month() && end.Year() == now.Year() {
+		return end.Format("Jan 2 15:04")
+	} else if end.Year() == now.Year() {
+		return end.Format("Jan 2")
+	} else {
+		return end.Format("2006-01-02")
+	}
+}
+
+func listTimers(timers []Timer, filter string) {
+	now := time.Now()
+	filtered := getFilteredTimers(timers, filter)
+
+	fmt.Println("Countdown Timers")
+	fmt.Println("================")
+	fmt.Println()
+
+	if len(filtered) == 0 {
+		fmt.Println("No timers found.")
+		return
+	}
+
+	for i, t := range filtered {
+		var statusEmoji, remainingText, endTimeText string
+
+		if t.Paused {
+			statusEmoji = "[paused]"
+			remainingText = formatDuration(t.Remaining)
+			endTimeText = ""
+		} else {
+			remaining := time.Until(t.End)
+			if remaining <= 0 {
+				statusEmoji = "[done]"
+				remainingText = "Done"
+				elapsed := t.Duration - remaining
+				endTimeText = fmt.Sprintf("(+%s elapsed)", formatDuration(elapsed))
+			} else {
+				statusEmoji = "[active]"
+				remainingText = formatDuration(remaining)
+				endTimeText = fmt.Sprintf("(ends %s)", formatEndTimeCLI(t.End, now))
+			}
+		}
+
+		fmt.Printf("[%d] %s %-30s %-13s", i+1, statusEmoji, t.Name, remainingText)
+		if endTimeText != "" {
+			fmt.Printf(" %s", endTimeText)
+		}
+		fmt.Println()
+	}
+
+	fmt.Printf("\nShowing %d timer(s)\n", len(filtered))
+}
+
 func main() {
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		fmt.Println("error:", err)
+	// If no arguments provided (other than program name), run TUI
+	if len(os.Args) < 2 {
+		p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+		if _, err := p.Run(); err != nil {
+			fmt.Println("error:", err)
+		}
+		return
+	}
+
+	// CLI mode: parse and execute commands
+	cmd := os.Args[1]
+	args := os.Args[2:]
+
+	// Load timers for CLI commands
+	timers, err := loadTimers()
+	if err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Error loading timers: %v\n", err)
+		os.Exit(1)
+	}
+	dirty := false
+
+	switch cmd {
+	case "add":
+		if len(args) < 2 {
+			fmt.Println("Usage: go-countdown add <name> <duration>")
+			fmt.Println("\nDuration examples: 30s, 5m, 1h, 2d, 1y, 30d30m, 1h30m")
+			os.Exit(1)
+		}
+		name := args[0]
+		duration := args[1]
+		d, err := parseDuration(duration)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid duration: %v\n", err)
+			os.Exit(1)
+		}
+		newTimer := Timer{
+			Name:     name,
+			End:      time.Now().Add(d),
+			Duration: d,
+		}
+		timers = append(timers, newTimer)
+		dirty = true
+		fmt.Printf("Added timer \"%s\" (%s)\n", name, formatDuration(d))
+
+	case "list":
+		filter := ""
+		if len(args) > 0 && strings.HasPrefix(args[0], "--") {
+			filter = args[0]
+		}
+		listTimers(timers, filter)
+
+	case "pause":
+		filter, _, idx := parseFilterAndIndex(args)
+		actualIdx, err := resolveIndex(timers, filter, idx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		if actualIdx >= 0 && len(timers) > 0 {
+			t := &timers[actualIdx]
+			if !t.Paused {
+				if t.End.After(time.Now()) {
+					t.Remaining = time.Until(t.End)
+					t.Paused = true
+					dirty = true
+					fmt.Printf("Paused timer \"%s\"\n", t.Name)
+				} else {
+					fmt.Fprintf(os.Stderr, "Cannot pause: timer already done\n")
+					os.Exit(1)
+				}
+			} else {
+				fmt.Printf("Timer \"%s\" is already paused\n", t.Name)
+			}
+		}
+
+	case "resume":
+		filter, _, idx := parseFilterAndIndex(args)
+		actualIdx, err := resolveIndex(timers, filter, idx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		if actualIdx >= 0 && len(timers) > 0 {
+			t := &timers[actualIdx]
+			if t.Paused {
+				if t.Remaining > 0 {
+					t.End = time.Now().Add(t.Remaining)
+					t.Paused = false
+					dirty = true
+					fmt.Printf("Resumed timer \"%s\"\n", t.Name)
+				} else {
+					fmt.Fprintf(os.Stderr, "Cannot resume: no remaining time\n")
+					os.Exit(1)
+				}
+			} else {
+				fmt.Printf("Timer \"%s\" is already active\n", t.Name)
+			}
+		}
+
+	case "delete":
+		filter, _, idx := parseFilterAndIndex(args)
+		actualIdx, err := resolveIndex(timers, filter, idx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		if actualIdx >= 0 && len(timers) > 0 {
+			deletedName := timers[actualIdx].Name
+			timers = append(timers[:actualIdx], timers[actualIdx+1:]...)
+			dirty = true
+			fmt.Printf("Deleted timer \"%s\"\n", deletedName)
+		}
+
+	case "restart":
+		filter, _, idx := parseFilterAndIndex(args)
+		actualIdx, err := resolveIndex(timers, filter, idx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		if actualIdx >= 0 && len(timers) > 0 && timers[actualIdx].Duration > 0 {
+			t := &timers[actualIdx]
+			t.End = time.Now().Add(t.Duration)
+			t.Paused = false
+			t.Remaining = 0
+			dirty = true
+			fmt.Printf("Restarted timer \"%s\"\n", t.Name)
+		}
+
+	case "edit":
+		if len(args) < 3 {
+			fmt.Println("Usage: go-countdown edit [--filter] <index> <name> <duration>")
+			fmt.Println("\nExamples:")
+			fmt.Println("  go-countdown edit 1 \"New Name\" 10m")
+			fmt.Println("  go-countdown edit --active 1 \"New Name\" 10m")
+			os.Exit(1)
+		}
+
+		var filter, indexStr, name, durationStr string
+		if strings.HasPrefix(args[0], "--") {
+			filter = args[0]
+			indexStr = args[1]
+			name = args[2]
+			if len(args) > 3 {
+				durationStr = args[3]
+			}
+		} else {
+			indexStr = args[0]
+			name = args[1]
+			if len(args) > 2 {
+				durationStr = args[2]
+			}
+		}
+
+		idx, err := strconv.Atoi(indexStr)
+		if err != nil || idx < 1 {
+			fmt.Fprintf(os.Stderr, "Invalid index: %s\n", indexStr)
+			os.Exit(1)
+		}
+
+		actualIdx, err := resolveIndex(timers, filter, idx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+
+		if actualIdx >= 0 && len(timers) > 0 {
+			t := &timers[actualIdx]
+			oldName := t.Name
+
+			// Update name if provided
+			if name != "" {
+				t.Name = name
+			}
+
+			// Update duration if provided
+			if durationStr != "" {
+				d, err := parseDuration(durationStr)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Invalid duration: %v\n", err)
+					os.Exit(1)
+				}
+				t.Duration = d
+				t.End = time.Now().Add(d)
+				t.Paused = false
+				t.Remaining = 0
+			}
+
+			dirty = true
+			fmt.Printf("Edited timer: \"%s\" -> \"%s\"\n", oldName, t.Name)
+		}
+
+	case "help", "-h", "--help":
+		printUsage()
+
+	default:
+		fmt.Printf("Unknown command: %s\n", cmd)
+		fmt.Println()
+		printUsage()
+		os.Exit(1)
+	}
+
+	// Save if any changes were made
+	if dirty {
+		if err := saveTimers(timers); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving timers: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
