@@ -7,9 +7,172 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 )
 
 type tickMsg time.Time
+
+// defaultKeyMap defines keybindings for the main timer view
+type defaultKeyMap struct {
+	Up        key.Binding
+	Down      key.Binding
+	UpOrder   key.Binding
+	DownOrder key.Binding
+	Add       key.Binding
+	Delete    key.Binding
+	Edit      key.Binding
+	Redo      key.Binding
+	Pause     key.Binding
+	Help      key.Binding
+	Quit      key.Binding
+}
+
+// ShortHelp returns keybindings for the mini help view
+func (k defaultKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Help, k.Quit}
+}
+
+// FullHelp returns keybindings for the full help view
+func (k defaultKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Up, k.Down, k.UpOrder, k.DownOrder},
+		{k.Add, k.Delete, k.Edit, k.Redo, k.Pause},
+		{k.Help, k.Quit},
+	}
+}
+
+func newDefaultKeyMap() defaultKeyMap {
+	return defaultKeyMap{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "move up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "move down"),
+		),
+		UpOrder: key.NewBinding(
+			key.WithKeys("ctrl+up", "ctrl+k"),
+			key.WithHelp("ctrl+↑", "reorder up"),
+		),
+		DownOrder: key.NewBinding(
+			key.WithKeys("ctrl+down", "ctrl+j"),
+			key.WithHelp("ctrl+↓", "reorder down"),
+		),
+		Add: key.NewBinding(
+			key.WithKeys("a"),
+			key.WithHelp("a", "add timer"),
+		),
+		Delete: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "delete timer"),
+		),
+		Edit: key.NewBinding(
+			key.WithKeys("e"),
+			key.WithHelp("e", "edit timer"),
+		),
+		Redo: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("r", "restart timer"),
+		),
+		Pause: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "pause/resume"),
+		),
+		Help: key.NewBinding(
+			key.WithKeys("?"),
+			key.WithHelp("?", "toggle help"),
+		),
+		Quit: key.NewBinding(
+			key.WithKeys("q", "ctrl+c"),
+			key.WithHelp("q", "quit"),
+		),
+	}
+}
+
+// formKeyMap defines keybindings for adding/editing timers
+type formKeyMap struct {
+	NextField key.Binding
+	PrevField key.Binding
+	Enter     key.Binding
+	Esc       key.Binding
+	Help      key.Binding
+}
+
+// ShortHelp returns keybindings for the mini help view
+func (k formKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Enter, k.Esc}
+}
+
+// FullHelp returns keybindings for the full help view
+func (k formKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.NextField, k.PrevField},
+		{k.Enter, k.Esc},
+	}
+}
+
+func newFormKeyMap() formKeyMap {
+	return formKeyMap{
+		NextField: key.NewBinding(
+			key.WithKeys("tab", "down"),
+			key.WithHelp("tab/↓", "next field"),
+		),
+		PrevField: key.NewBinding(
+			key.WithKeys("shift+tab", "up"),
+			key.WithHelp("↑/shift+tab", "prev field"),
+		),
+		Enter: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "confirm/next"),
+		),
+		Esc: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "cancel"),
+		),
+		Help: key.NewBinding(
+			key.WithKeys("?"),
+			key.WithHelp("?", "toggle help"),
+		),
+	}
+}
+
+// confirmKeyMap defines keybindings for delete confirmation
+type confirmKeyMap struct {
+	ConfirmYes key.Binding
+	ConfirmNo  key.Binding
+	Esc        key.Binding
+}
+
+// ShortHelp returns keybindings for the mini help view
+func (k confirmKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.ConfirmYes, k.ConfirmNo}
+}
+
+// FullHelp returns keybindings for the full help view
+func (k confirmKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.ConfirmYes, k.ConfirmNo, k.Esc},
+	}
+}
+
+func newConfirmKeyMap() confirmKeyMap {
+	return confirmKeyMap{
+		ConfirmYes: key.NewBinding(
+			key.WithKeys("y", "Y"),
+			key.WithHelp("y", "yes, delete"),
+		),
+		ConfirmNo: key.NewBinding(
+			key.WithKeys("n", "N"),
+			key.WithHelp("n", "no, cancel"),
+		),
+		Esc: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "cancel"),
+		),
+	}
+}
 
 type Timer struct {
 	Name      string        `json:"name"`
@@ -36,6 +199,10 @@ type model struct {
 	activeField     int
 
 	dirty bool
+	defaultKeys defaultKeyMap // key bindings for default view
+	formKeys    formKeyMap    // key bindings for form mode
+	confirmKeys confirmKeyMap // key bindings for delete confirmation
+	help        help.Model    // help component
 }
 
 func parseDuration(input string) (time.Duration, error) {
@@ -137,7 +304,19 @@ func tick() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
+	case tea.WindowSizeMsg:
+		m.help.Width = msg.Width
+		return m, nil
+
 	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, m.defaultKeys.Help):
+			if !m.adding && !m.editing && !m.confirmingDelete {
+				m.help.ShowAll = !m.help.ShowAll
+			}
+			return m, nil
+		}
+
 		if m.adding || m.editing {
 			switch msg.String() {
 
@@ -423,8 +602,9 @@ func (m model) View() string {
 		return fmt.Sprintf(
 			"🗑️  Delete Timer\n\n"+
 				"Delete \"%s\"?\n\n"+
-				"[y] yes  [n] no  [esc] cancel\n",
+				"%s",
 			m.timers[m.cursor].Name,
+			m.help.View(m.confirmKeys),
 		)
 	}
 
@@ -444,8 +624,8 @@ func (m model) View() string {
 			fmt.Fprintf(&b, "%s %s: %s\n", cursor, field.label, field.value)
 		}
 
-		b.WriteString("\n[tab/arrows] switch  [enter] next/confirm  [esc] cancel\n")
-		b.WriteString("Duration: 30 = 30s, 5m, 1h, 2d, 1y\n")
+		b.WriteString("\n" + m.help.View(m.formKeys))
+		b.WriteString("\nDuration: 30 = 30s, 5m, 1h, 2d, 1y\n")
 		return b.String()
 	}
 
@@ -485,13 +665,17 @@ func (m model) View() string {
 		}
 	}
 
-	b.WriteString("\n[a] add  [d] delete  [e] edit  [r] redo  [↑/↓] move  [Ctrl+↑/↓] reorder  [p] pause  [q] quit\n")
+	b.WriteString("\n" + m.help.View(m.defaultKeys))
 	return b.String()
 }
 
 func initialModel() model {
 	m := model{
-		now: time.Now(),
+		now:         time.Now(),
+		defaultKeys: newDefaultKeyMap(),
+		formKeys:    newFormKeyMap(),
+		confirmKeys: newConfirmKeyMap(),
+		help:        help.New(),
 	}
 
 	if s, err := loadFromFile(); err == nil {
