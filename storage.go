@@ -3,9 +3,18 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 )
 
-const saveFile = "countdown.json"
+var saveFile string
+
+func init() {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		configDir = "."
+	}
+	saveFile = filepath.Join(configDir, "go-countdown", "timers.json")
+}
 
 type saveData struct {
 	Timers []Timer `json:"timers"`
@@ -26,6 +35,10 @@ func saveToFile(m model) error {
 
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(saveFile), 0o755); err != nil {
 		return err
 	}
 
