@@ -27,22 +27,35 @@ const (
 	filterDone
 )
 
+type bulkActionType int
+
+const (
+	bulkPauseAll bulkActionType = iota
+	bulkResumeAll
+	bulkDeleteDone
+	bulkRestartAll
+)
+
 type defaultKeyMap struct {
-	Up        key.Binding
-	Down      key.Binding
-	UpOrder   key.Binding
-	DownOrder key.Binding
-	Add       key.Binding
-	Delete    key.Binding
-	Edit      key.Binding
-	Redo      key.Binding
-	Pause     key.Binding
-	Filter1   key.Binding
-	Filter2   key.Binding
-	Filter3   key.Binding
-	Filter4   key.Binding
-	Help      key.Binding
-	Quit      key.Binding
+	Up         key.Binding
+	Down       key.Binding
+	UpOrder    key.Binding
+	DownOrder  key.Binding
+	Add        key.Binding
+	Delete     key.Binding
+	DeleteDone key.Binding
+	Edit       key.Binding
+	Redo       key.Binding
+	RestartAll key.Binding
+	Pause      key.Binding
+	PauseAll   key.Binding
+	ResumeAll  key.Binding
+	Filter1    key.Binding
+	Filter2    key.Binding
+	Filter3    key.Binding
+	Filter4    key.Binding
+	Help       key.Binding
+	Quit       key.Binding
 }
 
 // ShortHelp returns keybindings for the mini help view
@@ -55,6 +68,7 @@ func (k defaultKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.UpOrder, k.DownOrder},
 		{k.Add, k.Delete, k.Edit, k.Redo, k.Pause},
+		{k.DeleteDone, k.RestartAll, k.PauseAll, k.ResumeAll},
 		{k.Filter1, k.Filter2, k.Filter3, k.Filter4},
 		{k.Help, k.Quit},
 	}
@@ -86,6 +100,10 @@ func newDefaultKeyMap() defaultKeyMap {
 			key.WithKeys("d"),
 			key.WithHelp("d", "delete timer"),
 		),
+		DeleteDone: key.NewBinding(
+			key.WithKeys("D"),
+			key.WithHelp("D", "delete all done"),
+		),
 		Edit: key.NewBinding(
 			key.WithKeys("e"),
 			key.WithHelp("e", "edit timer"),
@@ -94,9 +112,21 @@ func newDefaultKeyMap() defaultKeyMap {
 			key.WithKeys("r"),
 			key.WithHelp("r", "restart timer"),
 		),
+		RestartAll: key.NewBinding(
+			key.WithKeys("R"),
+			key.WithHelp("R", "restart all"),
+		),
 		Pause: key.NewBinding(
 			key.WithKeys("p"),
 			key.WithHelp("p", "pause/resume"),
+		),
+		PauseAll: key.NewBinding(
+			key.WithKeys("P"),
+			key.WithHelp("P", "pause all"),
+		),
+		ResumeAll: key.NewBinding(
+			key.WithKeys("shift+r"),
+			key.WithHelp("shift+R", "resume all"),
 		),
 		Filter1: key.NewBinding(
 			key.WithKeys("1"),
@@ -231,6 +261,8 @@ type model struct {
 	editing          bool // true when editing existing timer
 	editingIndex     int  // actual index of timer being edited
 	confirmingDelete bool // true when showing delete confirmation
+	confirmingBulk   bool // true when showing bulk operation confirmation
+	pendingBulkAction bulkActionType // which bulk action to execute
 	inputFields      []inputField
 	activeField      int
 
@@ -506,8 +538,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Block all keys except y/n/esc/enter when confirming delete
-		if m.confirmingDelete {
+		// Block all keys except y/n/esc/enter when confirming delete or bulk action
+		if m.confirmingDelete || m.confirmingBulk {
 			switch msg.String() {
 			case "y", "Y", "n", "N", "d", "esc", "enter":
 				// These keys are handled below
@@ -620,8 +652,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "y", "Y", "enter":
-			actualIdx := m.getActualTimerIndex(m.cursor)
 			if m.confirmingDelete {
+				actualIdx := m.getActualTimerIndex(m.cursor)
 				// Confirm delete
 				if actualIdx >= 0 && len(m.timers) > 0 {
 					m.timers = append(
@@ -638,11 +670,100 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.dirty = true
 				}
 			}
+			if m.confirmingBulk {
+				// Execute bulk action
+				switch m.pendingBulkAction {
+				case bulkPauseAll:
+					count := 0
+					for i := range m.timers {
+						if !m.timers[i].Paused && m.timers[i].End.After(m.now) {
+							m.timers[i].Remaining = time.Until(m.timers[i].End)
+							m.timers[i].Paused = true
+							count++
+						}
+					}
+					if count > 0 {
+						m.dirty = true
+					}
+				case bulkResumeAll:
+					count := 0
+					for i := range m.timers {
+						if m.timers[i].Paused && m.timers[i].Remaining > 0 {
+							m.timers[i].End = m.now.Add(m.timers[i].Remaining)
+							m.timers[i].Paused = false
+							count++
+						}
+					}
+					if count > 0 {
+						m.dirty = true
+					}
+				case bulkDeleteDone:
+					newTimers := make([]Timer, 0, len(m.timers))
+					for _, t := range m.timers {
+						if t.Paused || t.End.After(m.now) {
+							newTimers = append(newTimers, t)
+						} else {
+							m.dirty = true
+						}
+					}
+					m.timers = newTimers
+					// Adjust cursor if needed
+					visibleTimers := m.getVisibleTimers()
+					if m.cursor >= len(visibleTimers) && m.cursor > 0 {
+						m.cursor = len(visibleTimers) - 1
+					}
+				case bulkRestartAll:
+					count := 0
+					for i := range m.timers {
+						if m.timers[i].Duration > 0 {
+							m.timers[i].End = m.now.Add(m.timers[i].Duration)
+							m.timers[i].Paused = false
+							m.timers[i].Remaining = 0
+							count++
+						}
+					}
+					if count > 0 {
+						m.dirty = true
+					}
+				}
+				m.confirmingBulk = false
+			}
 			return m, nil
 
 		case "n", "N", "esc":
 			if m.confirmingDelete {
 				m.confirmingDelete = false
+			}
+			if m.confirmingBulk {
+				m.confirmingBulk = false
+			}
+			return m, nil
+
+		case "P":
+			if !m.adding && !m.editing && !m.confirmingDelete {
+				m.confirmingBulk = true
+				m.pendingBulkAction = bulkPauseAll
+			}
+			return m, nil
+
+		case "R":
+			if !m.adding && !m.editing && !m.confirmingDelete {
+				m.confirmingBulk = true
+				m.pendingBulkAction = bulkRestartAll
+			}
+			return m, nil
+
+		case "shift+R":
+			if !m.adding && !m.editing && !m.confirmingDelete {
+				m.confirmingBulk = true
+				m.pendingBulkAction = bulkResumeAll
+			}
+			return m, nil
+
+		case "D":
+			if !m.adding && !m.editing && !m.confirmingDelete {
+				m.confirmingBulk = true
+				m.pendingBulkAction = bulkDeleteDone
 			}
 			return m, nil
 
@@ -881,6 +1002,30 @@ func (m model) View() string {
 		)
 	}
 
+	if m.confirmingBulk {
+		var title, message string
+		switch m.pendingBulkAction {
+		case bulkPauseAll:
+			title = "⏸️  Pause All Active"
+			message = "Pause all active timers?"
+		case bulkResumeAll:
+			title = "▶️  Resume All Paused"
+			message = "Resume all paused timers?"
+		case bulkDeleteDone:
+			title = "🗑️  Delete Completed"
+			message = "Delete all completed timers?"
+		case bulkRestartAll:
+			title = "🔄  Restart All"
+			message = "Restart all timers?"
+		}
+		return fmt.Sprintf(
+			"%s\n\n%s\n\n%s",
+			title,
+			message,
+			m.help.View(m.confirmKeys),
+		)
+	}
+
 	if m.adding || m.editing {
 		var b strings.Builder
 		if m.editing {
@@ -996,12 +1141,31 @@ func printUsage() {
 	fmt.Println("COMMANDS:")
 	fmt.Println("  add <name> <duration>           Add a new timer")
 	fmt.Println("  list [--filter]                 List timers (filter: --active, --paused, --done)")
-	fmt.Println("  pause [filter] <index>          Pause timer by 1-based index")
-	fmt.Println("  resume [filter] <index>         Resume timer by 1-based index")
-	fmt.Println("  delete [filter] <index>         Delete timer by 1-based index")
-	fmt.Println("  restart [filter] <index>        Restart timer by 1-based index")
+	fmt.Println("  pause [--all] [filter] <index>  Pause timer(s) by 1-based index, or --all")
+	fmt.Println("  resume [--all] [filter] <index> Resume timer(s) by 1-based index, or --all")
+	fmt.Println("  delete [--done|--all] [filter] <index>  Delete timer(s) by index, --done, or --all")
+	fmt.Println("  restart [--all|--active|--paused] [filter] <index>  Restart timer(s)")
 	fmt.Println("  edit [filter] <index> <name> <duration>  Edit timer")
 	fmt.Println("  help                            Show this help")
+	fmt.Println()
+	fmt.Println("COMMAND SHORTCUTS:")
+	fmt.Println("  a         add")
+	fmt.Println("  l         list")
+	fmt.Println("  p         pause")
+	fmt.Println("  r         resume")
+	fmt.Println("  rs        restart")
+	fmt.Println("  d         delete")
+	fmt.Println("  e         edit")
+	fmt.Println("  h         help")
+	fmt.Println()
+	fmt.Println("BULK OPERATIONS:")
+	fmt.Println("  pause --all              Pause all active timers")
+	fmt.Println("  resume --all             Resume all paused timers")
+	fmt.Println("  delete --done            Delete all completed timers")
+	fmt.Println("  delete --all             Delete ALL timers (requires confirmation)")
+	fmt.Println("  restart --all            Restart all timers")
+	fmt.Println("  restart --active         Restart all active timers")
+	fmt.Println("  restart --paused         Restart all paused timers")
 	fmt.Println()
 	fmt.Println("DURATION FORMAT:")
 	fmt.Println("  30s    30 seconds")
@@ -1012,16 +1176,14 @@ func printUsage() {
 	fmt.Println("  30d30m Compound: 30 days 30 minutes")
 	fmt.Println()
 	fmt.Println("EXAMPLES:")
-	fmt.Println("  go-countdown add \"Meeting\" 30m")
-	fmt.Println("  go-countdown add \"Project deadline\" 2d")
-	fmt.Println("  go-countdown list                    # List all timers")
-	fmt.Println("  go-countdown list --active           # List only active timers")
-	fmt.Println("  go-countdown pause 1                 # Pause first timer (from all)")
-	fmt.Println("  go-countdown pause --active 1        # Pause first active timer")
-	fmt.Println("  go-countdown resume --paused 2       # Resume second paused timer")
-	fmt.Println("  go-countdown delete --done 1         # Delete first done timer")
-	fmt.Println("  go-countdown delete 2                # Delete second timer (from all)")
-	fmt.Println("  go-countdown restart 1               # Restart first timer")
+	fmt.Println("  go-countdown a \"Meeting\" 30m")
+	fmt.Println("  go-countdown l                    # List all timers")
+	fmt.Println("  go-countdown l --active           # List only active timers")
+	fmt.Println("  go-countdown p 1                  # Pause first timer")
+	fmt.Println("  go-countdown p --all              # Pause all active timers")
+	fmt.Println("  go-countdown r --paused 2         # Resume second paused timer")
+	fmt.Println("  go-countdown d --done             # Delete all completed timers")
+	fmt.Println("  go-countdown rs --all             # Restart all timers")
 }
 
 func parseFilterAndIndex(args []string) (filter, indexStr string, idx int) {
@@ -1156,6 +1318,23 @@ func main() {
 	cmd := os.Args[1]
 	args := os.Args[2:]
 
+	// Command aliases
+	aliases := map[string]string{
+		"a":   "add",
+		"l":   "list",
+		"p":   "pause",
+		"r":   "resume",
+		"d":   "delete",
+		"rs":  "restart",
+		"e":   "edit",
+		"h":   "help",
+	}
+
+	// Resolve alias
+	if fullCmd, ok := aliases[cmd]; ok {
+		cmd = fullCmd
+	}
+
 	// Load timers for CLI commands
 	timers, err := loadTimers()
 	if err != nil && !os.IsNotExist(err) {
@@ -1195,81 +1374,192 @@ func main() {
 		listTimers(timers, filter)
 
 	case "pause":
-		filter, _, idx := parseFilterAndIndex(args)
-		actualIdx, err := resolveIndex(timers, filter, idx)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(1)
-		}
-		if actualIdx >= 0 && len(timers) > 0 {
-			t := &timers[actualIdx]
-			if !t.Paused {
-				if t.End.After(time.Now()) {
-					t.Remaining = time.Until(t.End)
-					t.Paused = true
-					dirty = true
-					fmt.Printf("Paused timer \"%s\"\n", t.Name)
-				} else {
-					fmt.Fprintf(os.Stderr, "Cannot pause: timer already done\n")
-					os.Exit(1)
+		// Check for --all flag
+		if len(args) > 0 && args[0] == "--all" {
+			count := 0
+			now := time.Now()
+			for i := range timers {
+				if !timers[i].Paused && timers[i].End.After(now) {
+					timers[i].Remaining = time.Until(timers[i].End)
+					timers[i].Paused = true
+					count++
 				}
-			} else {
-				fmt.Printf("Timer \"%s\" is already paused\n", t.Name)
+			}
+			if count > 0 {
+				dirty = true
+			}
+			fmt.Printf("Paused %d timer(s)\n", count)
+		} else {
+			filter, _, idx := parseFilterAndIndex(args)
+			actualIdx, err := resolveIndex(timers, filter, idx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			if actualIdx >= 0 && len(timers) > 0 {
+				t := &timers[actualIdx]
+				if !t.Paused {
+					if t.End.After(time.Now()) {
+						t.Remaining = time.Until(t.End)
+						t.Paused = true
+						dirty = true
+						fmt.Printf("Paused timer \"%s\"\n", t.Name)
+					} else {
+						fmt.Fprintf(os.Stderr, "Cannot pause: timer already done\n")
+						os.Exit(1)
+					}
+				} else {
+					fmt.Printf("Timer \"%s\" is already paused\n", t.Name)
+				}
 			}
 		}
 
 	case "resume":
-		filter, _, idx := parseFilterAndIndex(args)
-		actualIdx, err := resolveIndex(timers, filter, idx)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(1)
-		}
-		if actualIdx >= 0 && len(timers) > 0 {
-			t := &timers[actualIdx]
-			if t.Paused {
-				if t.Remaining > 0 {
-					t.End = time.Now().Add(t.Remaining)
-					t.Paused = false
-					dirty = true
-					fmt.Printf("Resumed timer \"%s\"\n", t.Name)
-				} else {
-					fmt.Fprintf(os.Stderr, "Cannot resume: no remaining time\n")
-					os.Exit(1)
+		// Check for --all flag
+		if len(args) > 0 && args[0] == "--all" {
+			count := 0
+			for i := range timers {
+				if timers[i].Paused && timers[i].Remaining > 0 {
+					timers[i].End = time.Now().Add(timers[i].Remaining)
+					timers[i].Paused = false
+					count++
 				}
-			} else {
-				fmt.Printf("Timer \"%s\" is already active\n", t.Name)
+			}
+			if count > 0 {
+				dirty = true
+			}
+			fmt.Printf("Resumed %d timer(s)\n", count)
+		} else {
+			filter, _, idx := parseFilterAndIndex(args)
+			actualIdx, err := resolveIndex(timers, filter, idx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			if actualIdx >= 0 && len(timers) > 0 {
+				t := &timers[actualIdx]
+				if t.Paused {
+					if t.Remaining > 0 {
+						t.End = time.Now().Add(t.Remaining)
+						t.Paused = false
+						dirty = true
+						fmt.Printf("Resumed timer \"%s\"\n", t.Name)
+					} else {
+						fmt.Fprintf(os.Stderr, "Cannot resume: no remaining time\n")
+						os.Exit(1)
+					}
+				} else {
+					fmt.Printf("Timer \"%s\" is already active\n", t.Name)
+				}
 			}
 		}
 
 	case "delete":
-		filter, _, idx := parseFilterAndIndex(args)
-		actualIdx, err := resolveIndex(timers, filter, idx)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(1)
-		}
-		if actualIdx >= 0 && len(timers) > 0 {
-			deletedName := timers[actualIdx].Name
-			timers = append(timers[:actualIdx], timers[actualIdx+1:]...)
-			dirty = true
-			fmt.Printf("Deleted timer \"%s\"\n", deletedName)
+		// Check for --done or --all flags
+		if len(args) > 0 && args[0] == "--done" {
+			now := time.Now()
+			newTimers := make([]Timer, 0, len(timers))
+			count := 0
+			for _, t := range timers {
+				if !t.Paused && !t.End.After(now) {
+					count++
+				} else {
+					newTimers = append(newTimers, t)
+				}
+			}
+			if count > 0 {
+				dirty = true
+			}
+			timers = newTimers
+			fmt.Printf("Deleted %d completed timer(s)\n", count)
+		} else if len(args) > 0 && args[0] == "--all" {
+			// Require confirmation for delete --all
+			fmt.Print("Delete all timers? [y/N]: ")
+			var response string
+			_, _ = fmt.Scanln(&response)
+			if strings.ToLower(response) == "y" {
+				count := len(timers)
+				timers = []Timer{}
+				dirty = true
+				fmt.Printf("Deleted %d timer(s)\n", count)
+			} else {
+				fmt.Println("Cancelled")
+			}
+		} else {
+			filter, _, idx := parseFilterAndIndex(args)
+			actualIdx, err := resolveIndex(timers, filter, idx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			if actualIdx >= 0 && len(timers) > 0 {
+				deletedName := timers[actualIdx].Name
+				timers = append(timers[:actualIdx], timers[actualIdx+1:]...)
+				dirty = true
+				fmt.Printf("Deleted timer \"%s\"\n", deletedName)
+			}
 		}
 
 	case "restart":
-		filter, _, idx := parseFilterAndIndex(args)
-		actualIdx, err := resolveIndex(timers, filter, idx)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(1)
-		}
-		if actualIdx >= 0 && len(timers) > 0 && timers[actualIdx].Duration > 0 {
-			t := &timers[actualIdx]
-			t.End = time.Now().Add(t.Duration)
-			t.Paused = false
-			t.Remaining = 0
-			dirty = true
-			fmt.Printf("Restarted timer \"%s\"\n", t.Name)
+		// Check for --all, --active, or --paused flags
+		if len(args) > 0 && args[0] == "--all" {
+			count := 0
+			for i := range timers {
+				if timers[i].Duration > 0 {
+					timers[i].End = time.Now().Add(timers[i].Duration)
+					timers[i].Paused = false
+					timers[i].Remaining = 0
+					count++
+				}
+			}
+			if count > 0 {
+				dirty = true
+			}
+			fmt.Printf("Restarted %d timer(s)\n", count)
+		} else if len(args) > 0 && args[0] == "--active" {
+			now := time.Now()
+			count := 0
+			for i := range timers {
+				if !timers[i].Paused && timers[i].End.After(now) && timers[i].Duration > 0 {
+					timers[i].End = time.Now().Add(timers[i].Duration)
+					timers[i].Paused = false
+					timers[i].Remaining = 0
+					count++
+				}
+			}
+			if count > 0 {
+				dirty = true
+			}
+			fmt.Printf("Restarted %d active timer(s)\n", count)
+		} else if len(args) > 0 && args[0] == "--paused" {
+			count := 0
+			for i := range timers {
+				if timers[i].Paused && timers[i].Duration > 0 {
+					timers[i].End = time.Now().Add(timers[i].Duration)
+					timers[i].Paused = false
+					timers[i].Remaining = 0
+					count++
+				}
+			}
+			if count > 0 {
+				dirty = true
+			}
+			fmt.Printf("Restarted %d paused timer(s)\n", count)
+		} else {
+			filter, _, idx := parseFilterAndIndex(args)
+			actualIdx, err := resolveIndex(timers, filter, idx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			if actualIdx >= 0 && len(timers) > 0 && timers[actualIdx].Duration > 0 {
+				t := &timers[actualIdx]
+				t.End = time.Now().Add(t.Duration)
+				t.Paused = false
+				t.Remaining = 0
+				dirty = true
+				fmt.Printf("Restarted timer \"%s\"\n", t.Name)
+			}
 		}
 
 	case "edit":

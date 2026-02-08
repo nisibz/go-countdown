@@ -20,12 +20,6 @@ type saveData struct {
 	Timers []Timer `json:"timers"`
 }
 
-func makeSaveData(m model) saveData {
-	return saveData{
-		Timers: m.timers,
-	}
-}
-
 func applySaveData(m *model, s saveData) {
 	m.timers = s.Timers
 }
