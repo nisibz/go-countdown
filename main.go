@@ -192,8 +192,8 @@ func (k confirmKeyMap) FullHelp() [][]key.Binding {
 func newConfirmKeyMap() confirmKeyMap {
 	return confirmKeyMap{
 		ConfirmYes: key.NewBinding(
-			key.WithKeys("y", "Y"),
-			key.WithHelp("y", "yes, delete"),
+			key.WithKeys("y", "Y", "enter"),
+			key.WithHelp("y/enter", "yes, delete"),
 		),
 		ConfirmNo: key.NewBinding(
 			key.WithKeys("n", "N"),
@@ -497,10 +497,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Block all keys except y/n/esc when confirming delete
+		// Block all keys except y/n/esc/enter when confirming delete
 		if m.confirmingDelete {
 			switch msg.String() {
-			case "y", "Y", "n", "N", "d", "esc":
+			case "y", "Y", "n", "N", "d", "esc", "enter":
 				// These keys are handled below
 			default:
 				return m, nil
@@ -606,7 +606,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case "y", "Y":
+		case "y", "Y", "enter":
 			actualIdx := m.getActualTimerIndex(m.cursor)
 			if m.confirmingDelete {
 				// Confirm delete
