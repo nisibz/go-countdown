@@ -1,4 +1,4 @@
-module countdown
+module github.com/nisibz/go-countdown
 
 go 1.25.6
 
