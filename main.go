@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/table"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -220,21 +220,21 @@ type inputField struct {
 }
 
 type model struct {
-	timers          []Timer
-	now             time.Time
-	cursor          int
-	table           table.Model
+	timers []Timer
+	now    time.Time
+	cursor int
+	table  table.Model
 
-	adding          bool
-	editing         bool  // true when editing existing timer
-	editingIndex    int   // actual index of timer being edited
+	adding           bool
+	editing          bool // true when editing existing timer
+	editingIndex     int  // actual index of timer being edited
 	confirmingDelete bool // true when showing delete confirmation
-	inputFields     []inputField
-	activeField     int
+	inputFields      []inputField
+	activeField      int
 
 	filter filterMode
 
-	dirty bool
+	dirty       bool
 	defaultKeys defaultKeyMap // key bindings for default view
 	formKeys    formKeyMap    // key bindings for form mode
 	confirmKeys confirmKeyMap // key bindings for delete confirmation
@@ -248,42 +248,69 @@ func parseDuration(input string) (time.Duration, error) {
 		return 0, fmt.Errorf("empty input")
 	}
 
-	// Default to seconds if no suffix
-	if len(input) > 0 && input[len(input)-1] >= '0' && input[len(input)-1] <= '9' {
-		secs, err := strconv.Atoi(input)
-		if err != nil {
-			return 0, err
+	var total time.Duration
+
+	// Parse multiple number-suffix pairs (e.g., "30d30m", "1h30m", "2d")
+	i := 0
+	for i < len(input) {
+		// Skip spaces between components
+		if input[i] == ' ' {
+			i++
+			continue
 		}
-		return time.Duration(secs) * time.Second, nil
+
+		// Parse number
+		numStart := i
+		for i < len(input) && input[i] >= '0' && input[i] <= '9' {
+			i++
+		}
+		if i == numStart {
+			return 0, fmt.Errorf("expected number at position %d", numStart)
+		}
+		numStr := input[numStart:i]
+
+		num, err := strconv.Atoi(numStr)
+		if err != nil {
+			return 0, fmt.Errorf("invalid number %s: %w", numStr, err)
+		}
+
+		if num <= 0 {
+			return 0, fmt.Errorf("duration must be positive")
+		}
+
+		// Parse suffix (default to seconds if at end of input)
+		var suffix string
+		if i < len(input) {
+			suffix = input[i : i+1]
+			i++
+		} else {
+			// No suffix means seconds (e.g., "30" = 30s)
+			suffix = "s"
+		}
+
+		var d time.Duration
+		switch suffix {
+		case "s":
+			d = time.Duration(num) * time.Second
+		case "m":
+			d = time.Duration(num) * time.Minute
+		case "h":
+			d = time.Duration(num) * time.Hour
+		case "d":
+			d = time.Duration(num) * 24 * time.Hour
+		case "y":
+			d = time.Duration(num) * 365 * 24 * time.Hour
+		default:
+			return 0, fmt.Errorf("invalid suffix: %s (use s, m, h, d, y)", suffix)
+		}
+		total += d
 	}
 
-	// Parse number and suffix
-	numStr := input[:len(input)-1]
-	suffix := input[len(input)-1:]
-
-	num, err := strconv.Atoi(numStr)
-	if err != nil {
-		return 0, err
-	}
-
-	if num <= 0 {
+	if total <= 0 {
 		return 0, fmt.Errorf("duration must be positive")
 	}
 
-	switch suffix {
-	case "s":
-		return time.Duration(num) * time.Second, nil
-	case "m":
-		return time.Duration(num) * time.Minute, nil
-	case "h":
-		return time.Duration(num) * time.Hour, nil
-	case "d":
-		return time.Duration(num) * 24 * time.Hour, nil
-	case "y":
-		return time.Duration(num) * 365 * 24 * time.Hour, nil
-	default:
-		return 0, fmt.Errorf("invalid suffix: %s (use s, m, h, d, y)", suffix)
-	}
+	return total, nil
 }
 
 func formatDuration(d time.Duration) string {
@@ -748,7 +775,7 @@ func renderFilterPanel(m model) string {
 		if m.filter == f.mode {
 			prefix = ">"
 		}
-		b.WriteString(fmt.Sprintf("%s %s %s\n", prefix, f.num, f.label))
+		fmt.Fprintf(&b, "%s %s %s\n", prefix, f.num, f.label)
 	}
 	return b.String()
 }
@@ -844,7 +871,7 @@ func (m model) View() string {
 		}
 
 		b.WriteString("\n" + m.help.View(m.formKeys))
-		b.WriteString("\nDuration: 30 = 30s, 5m, 1h, 2d, 1y\n")
+		b.WriteString("\nDuration: 30s, 5m, 1h, 2d, 1y (e.g., 30d30m)\n")
 		return b.String()
 	}
 
@@ -865,7 +892,7 @@ func (m model) View() string {
 	maxFilterLines := len(filterLines)
 	for i := 0; i < maxFilterLines || i < len(timerLines); i++ {
 		if i < len(filterLines) {
-			b.WriteString(fmt.Sprintf("%-20s", filterLines[i]))
+			fmt.Fprintf(&b, "%-20s", filterLines[i])
 		} else {
 			b.WriteString(strings.Repeat(" ", 20))
 		}
