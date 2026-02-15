@@ -26,6 +26,7 @@ type model struct {
 	editing           bool           // true when editing existing timer
 	editingIndex      int            // actual index of timer being edited
 	confirmingDelete  bool           // true when showing delete confirmation
+	confirmingRestart bool           // true when showing restart confirmation
 	confirmingBulk    bool           // true when showing bulk operation confirmation
 	pendingBulkAction bulkActionType // which bulk action to execute
 	nameInput         textinput.Model

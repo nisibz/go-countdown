@@ -61,7 +61,7 @@ func updateTableRows(m *model) {
 }
 
 func (m model) View() string {
-	if m.confirmingDelete || m.confirmingBulk {
+	if m.confirmingDelete || m.confirmingRestart || m.confirmingBulk {
 		return renderPopupOverlay(m)
 	}
 
@@ -272,6 +272,10 @@ func renderConfirmPopup(m model) string {
 		actualIdx := m.getActualTimerIndex(m.cursor)
 		title = "🗑️  Delete Timer"
 		message = fmt.Sprintf("Delete \"%s\"?", m.timers[actualIdx].Name)
+	} else if m.confirmingRestart {
+		actualIdx := m.getActualTimerIndex(m.cursor)
+		title = "🔄  Restart Timer"
+		message = fmt.Sprintf("Restart \"%s\"?", m.timers[actualIdx].Name)
 	} else {
 		switch m.pendingBulkAction {
 		case bulkPauseAll:
@@ -325,7 +329,7 @@ func renderPopupOverlay(m model) string {
 
 	// Render the popup
 	var popup string
-	if m.confirmingDelete || m.confirmingBulk {
+	if m.confirmingDelete || m.confirmingRestart || m.confirmingBulk {
 		popup = renderConfirmPopup(m)
 	} else {
 		popup = renderPopupForm(m)
