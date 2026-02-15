@@ -61,11 +61,11 @@ func updateTableRows(m *model) {
 }
 
 func (m model) View() string {
-	if m.confirmingDelete || m.confirmingRestart || m.confirmingBulk {
+	if m.state == stateConfirmDelete || m.state == stateConfirmRestart || m.state == stateConfirmBulk {
 		return renderPopupOverlay(m)
 	}
 
-	if m.adding || m.editing {
+	if m.state == stateAdding || m.state == stateEditing {
 		return renderPopupOverlay(m)
 	}
 
@@ -191,7 +191,7 @@ func renderPopupForm(m model) string {
 
 	// Build title
 	var title string
-	if m.editing {
+	if m.state == stateEditing {
 		title = "✏️  Edit Timer"
 	} else {
 		title = "➕️ Add Timer"
@@ -268,11 +268,11 @@ func renderConfirmPopup(m model) string {
 
 	// Build title and message
 	var title, message string
-	if m.confirmingDelete {
+	if m.state == stateConfirmDelete {
 		actualIdx := m.getActualTimerIndex(m.cursor)
 		title = "🗑️  Delete Timer"
 		message = fmt.Sprintf("Delete \"%s\"?", m.timers[actualIdx].Name)
-	} else if m.confirmingRestart {
+	} else if m.state == stateConfirmRestart {
 		actualIdx := m.getActualTimerIndex(m.cursor)
 		title = "🔄  Restart Timer"
 		message = fmt.Sprintf("Restart \"%s\"?", m.timers[actualIdx].Name)
@@ -329,7 +329,7 @@ func renderPopupOverlay(m model) string {
 
 	// Render the popup
 	var popup string
-	if m.confirmingDelete || m.confirmingRestart || m.confirmingBulk {
+	if m.state == stateConfirmDelete || m.state == stateConfirmRestart || m.state == stateConfirmBulk {
 		popup = renderConfirmPopup(m)
 	} else {
 		popup = renderPopupForm(m)

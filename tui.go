@@ -16,33 +16,47 @@ type (
 	fileWatchMsg struct{}
 )
 
+type uiState int
+
+const (
+	stateDefault uiState = iota
+	stateAdding
+	stateEditing
+	stateConfirmDelete
+	stateConfirmRestart
+	stateConfirmBulk
+)
+
 type model struct {
+	// Timer data
 	timers []Timer
 	now    time.Time
 	cursor int
 	table  table.Model
+	filter filterMode
 
-	adding            bool
-	editing           bool           // true when editing existing timer
+	// UI state
+	state uiState
+
+	// Form/operation state
 	editingIndex      int            // actual index of timer being edited
-	confirmingDelete  bool           // true when showing delete confirmation
-	confirmingRestart bool           // true when showing restart confirmation
-	confirmingBulk    bool           // true when showing bulk operation confirmation
 	pendingBulkAction bulkActionType // which bulk action to execute
 	nameInput         textinput.Model
 	durationInput     textinput.Model
 
-	filter filterMode
-
+	// Persistence
 	dirty       bool
 	lastModTime time.Time // track file modification time for external changes
+
+	// Key bindings and help
 	defaultKeys defaultKeyMap
 	formKeys    formKeyMap
 	confirmKeys confirmKeyMap
 	help        help.Model
 
-	width  int // terminal width
-	height int // terminal height
+	// Terminal dimensions
+	width  int
+	height int
 }
 
 func (m model) Init() tea.Cmd {
@@ -100,14 +114,15 @@ func initialModel() model {
 	}
 
 	m := model{
-		now:           time.Now(),
-		filter:        filterAll,
-		defaultKeys:   newDefaultKeyMap(),
-		formKeys:      newFormKeyMap(),
-		confirmKeys:   newConfirmKeyMap(),
-		help:          help.New(),
-		table:         tbl,
-		nameInput:     nameInput,
+		now:         time.Now(),
+		filter:      filterAll,
+		state:       stateDefault,
+		defaultKeys: newDefaultKeyMap(),
+		formKeys:    newFormKeyMap(),
+		confirmKeys: newConfirmKeyMap(),
+		help:        help.New(),
+		table:       tbl,
+		nameInput:   nameInput,
 		durationInput: durationInput,
 	}
 

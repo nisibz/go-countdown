@@ -30,13 +30,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, m.defaultKeys.Help):
-			if !m.adding && !m.editing && !m.confirmingDelete && !m.confirmingRestart {
+			if m.state == stateDefault {
 				m.help.ShowAll = !m.help.ShowAll
 			}
 			return m, nil
 		}
 
-		if m.adding || m.editing {
+		if m.state == stateAdding || m.state == stateEditing {
 			// Handle form input with textinput components
 			var cmd tea.Cmd
 
@@ -68,7 +68,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 
-				if m.editing {
+				if m.state == stateEditing {
 					// Update existing timer
 					m.timers[m.editingIndex].Name = name
 					m.timers[m.editingIndex].End = time.Now().Add(duration)
@@ -89,8 +89,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.dirty = true
 
 				// Reset and close form
-				m.adding = false
-				m.editing = false
+				m.state = stateDefault
 				m.nameInput.Reset()
 				m.durationInput.Reset()
 				m.nameInput.Focus()
@@ -98,8 +97,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case "esc":
 				// Cancel and close form
-				m.adding = false
-				m.editing = false
+				m.state = stateDefault
 				m.nameInput.Reset()
 				m.durationInput.Reset()
 				m.nameInput.Focus()
@@ -117,7 +115,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Block all keys except y/n/esc/enter when confirming delete, restart, or bulk action
-		if m.confirmingDelete || m.confirmingRestart || m.confirmingBulk {
+		if m.state == stateConfirmDelete || m.state == stateConfirmRestart || m.state == stateConfirmBulk {
 			switch msg.String() {
 			case "y", "Y", "n", "N", "d", "esc", "enter":
 				// These keys are handled below
@@ -209,7 +207,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			if m.confirmingDelete {
+			if m.state == stateConfirmDelete {
 				// Confirm delete
 				m.timers = append(
 					m.timers[:actualIdx],
@@ -221,16 +219,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor--
 				}
 
-				m.confirmingDelete = false
+				m.state = stateDefault
 				m.dirty = true
 			} else {
 				// Show confirmation
-				m.confirmingDelete = true
+				m.state = stateConfirmDelete
 			}
 			return m, nil
 
 		case "y", "Y", "enter":
-			if m.confirmingDelete {
+			if m.state == stateConfirmDelete {
 				actualIdx := m.getActualTimerIndex(m.cursor)
 				// Confirm delete
 				if actualIdx >= 0 && len(m.timers) > 0 {
@@ -244,11 +242,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.cursor--
 					}
 
-					m.confirmingDelete = false
+					m.state = stateDefault
 					m.dirty = true
 				}
 			}
-			if m.confirmingRestart {
+			if m.state == stateConfirmRestart {
 				actualIdx := m.getActualTimerIndex(m.cursor)
 				// Confirm restart
 				if actualIdx >= 0 && len(m.timers) > 0 && m.timers[actualIdx].Duration > 0 {
@@ -256,12 +254,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					t.End = m.now.Add(t.Duration)
 					t.Paused = false
 					t.Remaining = 0
-					m.confirmingRestart = false
+					m.state = stateDefault
 					m.dirty = true
 					return m, tick()
 				}
 			}
-			if m.confirmingBulk {
+			if m.state == stateConfirmBulk {
 				// Execute bulk action
 				switch m.pendingBulkAction {
 				case bulkPauseAll:
@@ -317,56 +315,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.dirty = true
 					}
 				}
-				m.confirmingBulk = false
+				m.state = stateDefault
 			}
 			return m, nil
 
 		case "n", "N", "esc":
-			if m.confirmingDelete {
-				m.confirmingDelete = false
-			}
-			if m.confirmingRestart {
-				m.confirmingRestart = false
-			}
-			if m.confirmingBulk {
-				m.confirmingBulk = false
+			if m.state == stateConfirmDelete || m.state == stateConfirmRestart || m.state == stateConfirmBulk {
+				m.state = stateDefault
 			}
 			return m, nil
 
 		case "P":
-			if !m.adding && !m.editing && !m.confirmingDelete && !m.confirmingRestart {
-				m.confirmingBulk = true
+			if m.state == stateDefault {
+				m.state = stateConfirmBulk
 				m.pendingBulkAction = bulkPauseAll
 			}
 			return m, nil
 
 		case "R":
-			if !m.adding && !m.editing && !m.confirmingDelete && !m.confirmingRestart {
-				m.confirmingBulk = true
+			if m.state == stateDefault {
+				m.state = stateConfirmBulk
 				m.pendingBulkAction = bulkRestartAll
 			}
 			return m, nil
 
 		case "shift+R":
-			if !m.adding && !m.editing && !m.confirmingDelete && !m.confirmingRestart {
-				m.confirmingBulk = true
+			if m.state == stateDefault {
+				m.state = stateConfirmBulk
 				m.pendingBulkAction = bulkResumeAll
 			}
 			return m, nil
 
 		case "D":
-			if !m.adding && !m.editing && !m.confirmingDelete && !m.confirmingRestart {
-				m.confirmingBulk = true
+			if m.state == stateDefault {
+				m.state = stateConfirmBulk
 				m.pendingBulkAction = bulkDeleteDone
 			}
 			return m, nil
 
 		case "a":
-			if m.adding || m.editing {
+			if m.state != stateDefault {
 				return m, nil
 			}
 
-			m.adding = true
+			m.state = stateAdding
 			m.nameInput.Reset()
 			m.durationInput.Reset()
 			m.nameInput.Focus()
@@ -379,25 +371,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			if m.confirmingRestart {
+			if m.state == stateConfirmRestart {
 				// Confirm restart
 				t := &m.timers[actualIdx]
 				t.End = time.Now().Add(t.Duration)
 				t.Paused = false
 				t.Remaining = 0
-				m.confirmingRestart = false
+				m.state = stateDefault
 				m.dirty = true
 				return m, tick()
 			} else {
 				// Show confirmation
-				m.confirmingRestart = true
+				m.state = stateConfirmRestart
 			}
 			return m, nil
 
 		case "e":
 			actualIdx := m.getActualTimerIndex(m.cursor)
 			if actualIdx >= 0 && len(m.timers) > 0 {
-				m.editing = true
+				m.state = stateEditing
 				m.editingIndex = actualIdx
 				m.nameInput.Reset()
 				m.durationInput.Reset()
