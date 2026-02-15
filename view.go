@@ -97,7 +97,7 @@ func (m model) View() string {
 	}
 
 	if m.adding || m.editing {
-		return renderPopupForm(m)
+		return renderPopupOverlay(m)
 	}
 
 	// Build filter panel
@@ -147,13 +147,47 @@ func setupTableStyles(tbl table.Model) table.Model {
 	return tbl
 }
 
+func renderMainView(m model) string {
+	// Build filter panel
+	filterPanel := renderFilterPanel(m)
+
+	// Update table rows with current timer data
+	updateTableRows(&m)
+
+	// Build timer table
+	timerTable := m.table.View()
+
+	// Combine filter panel and table side by side
+	filterLines := strings.Split(filterPanel, "\n")
+	timerLines := strings.Split(timerTable, "\n")
+
+	var b strings.Builder
+	maxFilterLines := len(filterLines)
+	for i := 0; i < maxFilterLines || i < len(timerLines); i++ {
+		if i < len(filterLines) {
+			fmt.Fprintf(&b, "%-20s", filterLines[i])
+		} else {
+			b.WriteString(strings.Repeat(" ", 20))
+		}
+		if i < len(timerLines) {
+			b.WriteString(timerLines[i])
+		}
+		if i < maxFilterLines-1 || i < len(timerLines)-1 {
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("\n" + m.help.View(m.defaultKeys))
+	return b.String()
+}
+
 func renderPopupForm(m model) string {
 	// Define styles
 	var (
-		borderColor    = lipgloss.Color("63")
-		focusedColor   = lipgloss.Color("228")
-		labelColor     = lipgloss.Color("241")
-		hintColor      = lipgloss.Color("245")
+		borderColor  = lipgloss.Color("99")   // Purple border
+		focusedColor = lipgloss.Color("226")  // Bright yellow for focus
+		labelColor   = lipgloss.Color("147")  // Light blue for labels
+		hintColor    = lipgloss.Color("244")  // Gray for hints
 
 		popupStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -163,7 +197,7 @@ func renderPopupForm(m model) string {
 
 		titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(focusedColor).
+			Foreground(lipgloss.Color("213")). // Pink/purple title
 			MarginBottom(1)
 
 		labelStyle = lipgloss.NewStyle().
@@ -175,11 +209,11 @@ func renderPopupForm(m model) string {
 			Bold(true)
 
 		hintStyle = lipgloss.NewStyle().
-			Faint(true).
 			Foreground(hintColor)
 
 		helpStyle = lipgloss.NewStyle().
-			MarginTop(1)
+			MarginTop(1).
+			Foreground(lipgloss.Color("245"))
 
 		divider = lipgloss.NewStyle().
 			Foreground(hintColor).
@@ -204,7 +238,7 @@ func renderPopupForm(m model) string {
 	b.WriteString("\n\n")
 
 	// Name input - show focused label if name input is focused
- nameLabel := "Name:"
+	nameLabel := "Name:"
 	if m.nameInput.Focused() {
 		nameLabel = focusedLabelStyle.Render(nameLabel)
 	} else {
@@ -230,11 +264,11 @@ func renderPopupForm(m model) string {
 	// Help text
 	b.WriteString(helpStyle.Render(m.help.View(m.formKeys)))
 
-	// Render popup and center it
-	popupContent := b.String()
-	popup := popupStyle.Render(popupContent)
+	return popupStyle.Render(b.String())
+}
 
-	// Center the popup on screen
+func renderPopupOverlay(m model) string {
+	// Get dimensions
 	width := m.width
 	height := m.height
 	if width == 0 {
@@ -243,11 +277,81 @@ func renderPopupForm(m model) string {
 	if height == 0 {
 		height = 24
 	}
-	return lipgloss.Place(
-		width,
-		height,
-		lipgloss.Center,
-		lipgloss.Center,
-		popup,
-	)
+
+	// Render the main view (background)
+	mainView := renderMainView(m)
+	mainLines := strings.Split(mainView, "\n")
+
+	// Render the popup
+	popup := renderPopupForm(m)
+	popupLines := strings.Split(popup, "\n")
+	popupHeight := len(popupLines)
+
+	// Calculate vertical position for popup (centered)
+	popupStartRow := (height - popupHeight) / 2
+	if popupStartRow < 0 {
+		popupStartRow = 0
+	}
+
+	// Calculate horizontal position for popup (centered)
+	// Popup width is 58 (from style) + borders (4) + padding (4) = ~66 chars
+	popupWidth := 66
+	popupStartCol := (width - popupWidth) / 2
+	if popupStartCol < 0 {
+		popupStartCol = 0
+	}
+	popupEndCol := popupStartCol + popupWidth
+
+	// Build the overlay view line by line
+	var result strings.Builder
+
+	for row := 0; row < height; row++ {
+		if row >= popupStartRow && row < popupStartRow+popupHeight {
+			// This row has the popup overlay
+			popupLineIdx := row - popupStartRow
+			popupLine := popupLines[popupLineIdx]
+
+			// Get the corresponding background line (if any)
+			var bgLine string
+			if row < len(mainLines) {
+				bgLine = mainLines[row]
+			}
+
+			// Build the line: background + popup
+			var lineBuilder strings.Builder
+
+			// Part before popup (normal background)
+			if len(bgLine) > popupStartCol {
+				lineBuilder.WriteString(bgLine[:popupStartCol])
+			} else {
+				lineBuilder.WriteString(bgLine)
+				if len(bgLine) < popupStartCol {
+					lineBuilder.WriteString(strings.Repeat(" ", popupStartCol-len(bgLine)))
+				}
+			}
+
+			// The popup itself
+			lineBuilder.WriteString(popupLine)
+
+			// Part after popup (normal background, if needed)
+			if len(bgLine) > popupEndCol {
+				lineBuilder.WriteString(bgLine[popupEndCol:])
+			}
+
+			result.WriteString(lineBuilder.String())
+		} else {
+			// This row shows only normal background
+			if row < len(mainLines) {
+				result.WriteString(mainLines[row])
+			} else {
+				result.WriteString(strings.Repeat(" ", width))
+			}
+		}
+
+		if row < height-1 {
+			result.WriteString("\n")
+		}
+	}
+
+	return result.String()
 }
