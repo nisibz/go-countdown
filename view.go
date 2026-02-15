@@ -61,39 +61,8 @@ func updateTableRows(m *model) {
 }
 
 func (m model) View() string {
-	if m.confirmingDelete {
-		actualIdx := m.getActualTimerIndex(m.cursor)
-		return fmt.Sprintf(
-			"🗑️  Delete Timer\n\n"+
-				"Delete \"%s\"?\n\n"+
-				"%s",
-			m.timers[actualIdx].Name,
-			m.help.View(m.confirmKeys),
-		)
-	}
-
-	if m.confirmingBulk {
-		var title, message string
-		switch m.pendingBulkAction {
-		case bulkPauseAll:
-			title = "⏸️  Pause All Active"
-			message = "Pause all active timers?"
-		case bulkResumeAll:
-			title = "▶️  Resume All Paused"
-			message = "Resume all paused timers?"
-		case bulkDeleteDone:
-			title = "🗑️  Delete Completed"
-			message = "Delete all completed timers?"
-		case bulkRestartAll:
-			title = "🔄  Restart All"
-			message = "Restart all timers?"
-		}
-		return fmt.Sprintf(
-			"%s\n\n%s\n\n%s",
-			title,
-			message,
-			m.help.View(m.confirmKeys),
-		)
+	if m.confirmingDelete || m.confirmingBulk {
+		return renderPopupOverlay(m)
 	}
 
 	if m.adding || m.editing {
@@ -267,6 +236,78 @@ func renderPopupForm(m model) string {
 	return popupStyle.Render(b.String())
 }
 
+func renderConfirmPopup(m model) string {
+	// Define styles
+	var (
+		borderColor = lipgloss.Color("99")   // Purple border
+		labelColor  = lipgloss.Color("147")  // Light blue for labels
+		hintColor   = lipgloss.Color("244")  // Gray for hints
+
+		popupStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(borderColor).
+			Padding(1, 2).
+			Width(58)
+
+		titleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("213")). // Pink/purple title
+			MarginBottom(1)
+
+		labelStyle = lipgloss.NewStyle().
+			Foreground(labelColor)
+
+		helpStyle = lipgloss.NewStyle().
+			MarginTop(1).
+			Foreground(hintColor)
+
+		divider = lipgloss.NewStyle().
+			Foreground(hintColor).
+			Render(strings.Repeat("─", 54))
+	)
+
+	// Build title and message
+	var title, message string
+	if m.confirmingDelete {
+		actualIdx := m.getActualTimerIndex(m.cursor)
+		title = "🗑️  Delete Timer"
+		message = fmt.Sprintf("Delete \"%s\"?", m.timers[actualIdx].Name)
+	} else {
+		switch m.pendingBulkAction {
+		case bulkPauseAll:
+			title = "⏸️  Pause All Active"
+			message = "Pause all active timers?"
+		case bulkResumeAll:
+			title = "▶️  Resume All Paused"
+			message = "Resume all paused timers?"
+		case bulkDeleteDone:
+			title = "🗑️  Delete Completed"
+			message = "Delete all completed timers?"
+		case bulkRestartAll:
+			title = "🔄  Restart All"
+			message = "Restart all timers?"
+		}
+	}
+
+	// Build form content
+	var b strings.Builder
+
+	// Title
+	b.WriteString(titleStyle.Render(title))
+	b.WriteString("\n")
+	b.WriteString(divider)
+	b.WriteString("\n\n")
+
+	// Message
+	b.WriteString(labelStyle.Render(message))
+	b.WriteString("\n")
+
+	// Help text
+	b.WriteString(helpStyle.Render(m.help.View(m.confirmKeys)))
+
+	return popupStyle.Render(b.String())
+}
+
 func renderPopupOverlay(m model) string {
 	// Get dimensions
 	width := m.width
@@ -283,7 +324,12 @@ func renderPopupOverlay(m model) string {
 	mainLines := strings.Split(mainView, "\n")
 
 	// Render the popup
-	popup := renderPopupForm(m)
+	var popup string
+	if m.confirmingDelete || m.confirmingBulk {
+		popup = renderConfirmPopup(m)
+	} else {
+		popup = renderPopupForm(m)
+	}
 	popupLines := strings.Split(popup, "\n")
 	popupHeight := len(popupLines)
 
