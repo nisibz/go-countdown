@@ -19,6 +19,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.help.Width = msg.Width
+		m.width = msg.Width
+		m.height = msg.Height
 		// Adjust table width based on available space (filter panel takes 20 chars)
 		tableWidth := msg.Width - 25 // Leave room for filter panel + padding
 		m.table.SetWidth(tableWidth)
@@ -35,94 +37,82 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.adding || m.editing {
+			// Handle form input with textinput components
+			var cmd tea.Cmd
+
 			switch msg.String() {
-
-			case "up", "shift+tab":
-				if m.activeField > 0 {
-					m.activeField--
-				}
-				return m, nil
-
-			case "down", "tab":
-				if m.activeField < len(m.inputFields)-1 {
-					m.activeField++
+			case "tab", "shift+tab":
+				// Toggle focus between name and duration inputs
+				if m.nameInput.Focused() {
+					m.nameInput.Blur()
+					m.durationInput.Focus()
+				} else {
+					m.durationInput.Blur()
+					m.nameInput.Focus()
 				}
 				return m, nil
 
 			case "enter":
-				// If not on last field, move to next field (but name is required)
-				if m.activeField < len(m.inputFields)-1 {
-					if m.activeField == 0 && m.inputFields[0].value == "" {
-						// Name is empty, don't move to next field
-						return m, nil
-					}
-					m.activeField++
+				// Validate and submit
+				name := m.nameInput.Value()
+				durationStr := m.durationInput.Value()
+
+				// Name is required
+				if name == "" {
 					return m, nil
 				}
-				duration, err := parseDuration(m.inputFields[1].value)
-				if err == nil && m.inputFields[0].value != "" {
-					if m.editing {
-						// Update existing timer
-						m.timers[m.editingIndex].Name = m.inputFields[0].value
-						m.timers[m.editingIndex].End = time.Now().Add(duration)
-						m.timers[m.editingIndex].Duration = duration
-						m.timers[m.editingIndex].Paused = false
-						m.timers[m.editingIndex].Remaining = 0
-					} else {
-						// Add new timer
-						newTimer := Timer{
-							Name:     m.inputFields[0].value,
-							End:      time.Now().Add(duration),
-							Duration: duration,
-						}
-						m.timers = append(m.timers, newTimer)
-						visibleTimers := m.getVisibleTimers()
-						m.cursor = len(visibleTimers) - 1
-					}
-					m.dirty = true
+
+				// Validate duration
+				duration, err := parseDuration(durationStr)
+				if err != nil {
+					return m, nil
 				}
 
+				if m.editing {
+					// Update existing timer
+					m.timers[m.editingIndex].Name = name
+					m.timers[m.editingIndex].End = time.Now().Add(duration)
+					m.timers[m.editingIndex].Duration = duration
+					m.timers[m.editingIndex].Paused = false
+					m.timers[m.editingIndex].Remaining = 0
+				} else {
+					// Add new timer
+					newTimer := Timer{
+						Name:     name,
+						End:      time.Now().Add(duration),
+						Duration: duration,
+					}
+					m.timers = append(m.timers, newTimer)
+					visibleTimers := m.getVisibleTimers()
+					m.cursor = len(visibleTimers) - 1
+				}
+				m.dirty = true
+
+				// Reset and close form
 				m.adding = false
 				m.editing = false
-				for i := range m.inputFields {
-					m.inputFields[i].value = ""
-				}
+				m.nameInput.Reset()
+				m.durationInput.Reset()
+				m.nameInput.Focus()
 				return m, tick()
 
 			case "esc":
+				// Cancel and close form
 				m.adding = false
 				m.editing = false
-				for i := range m.inputFields {
-					m.inputFields[i].value = ""
-				}
-				return m, nil
-
-			case "backspace":
-				if len(m.inputFields[m.activeField].value) > 0 {
-					m.inputFields[m.activeField].value = m.inputFields[m.activeField].value[:len(m.inputFields[m.activeField].value)-1]
-				}
+				m.nameInput.Reset()
+				m.durationInput.Reset()
+				m.nameInput.Focus()
 				return m, nil
 
 			default:
-				// Handle space key for name field
-				if msg.String() == " " && m.activeField == 0 {
-					m.inputFields[m.activeField].value += " "
-					return m, nil
+				// Update the focused input
+				if m.nameInput.Focused() {
+					m.nameInput, cmd = m.nameInput.Update(msg)
+				} else {
+					m.durationInput, cmd = m.durationInput.Update(msg)
 				}
-				if msg.Type == tea.KeyRunes {
-					ch := msg.String()[0]
-					switch m.activeField {
-					case 0:
-						// First field: any characters allowed
-						m.inputFields[m.activeField].value += msg.String()
-					case 1:
-						// Duration field: numbers and suffix letters only
-						if (ch >= '0' && ch <= '9') || ch == 's' || ch == 'm' || ch == 'h' || ch == 'd' || ch == 'y' {
-							m.inputFields[m.activeField].value += msg.String()
-						}
-					}
-				}
-				return m, nil
+				return m, cmd
 			}
 		}
 
@@ -361,11 +351,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			m.adding = true
-			m.inputFields = []inputField{
-				{label: "Name", value: ""},
-				{label: "Duration", value: ""},
-			}
-			m.activeField = 0
+			m.nameInput.Reset()
+			m.durationInput.Reset()
+			m.nameInput.Focus()
+			m.durationInput.Blur()
 			return m, nil
 
 		case "r":
@@ -385,11 +374,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if actualIdx >= 0 && len(m.timers) > 0 {
 				m.editing = true
 				m.editingIndex = actualIdx
-				m.inputFields = []inputField{
-					{label: "Name", value: m.timers[actualIdx].Name},
-					{label: "Duration", value: formatDuration(m.timers[actualIdx].Duration)},
-				}
-				m.activeField = 0
+				m.nameInput.Reset()
+				m.durationInput.Reset()
+				m.nameInput.SetValue(m.timers[actualIdx].Name)
+				m.durationInput.SetValue(formatDuration(m.timers[actualIdx].Duration))
+				m.nameInput.Focus()
+				m.durationInput.Blur()
 			}
 			return m, nil
 

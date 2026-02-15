@@ -97,24 +97,7 @@ func (m model) View() string {
 	}
 
 	if m.adding || m.editing {
-		var b strings.Builder
-		if m.editing {
-			b.WriteString("✏️  Edit Timer\n\n")
-		} else {
-			b.WriteString("➕️ Add Timer\n\n")
-		}
-
-		for i, field := range m.inputFields {
-			cursor := "  "
-			if i == m.activeField {
-				cursor = "▶️"
-			}
-			fmt.Fprintf(&b, "%s %s: %s\n", cursor, field.label, field.value)
-		}
-
-		b.WriteString("\n" + m.help.View(m.formKeys))
-		b.WriteString("\nDuration: 30s, 5m, 1h, 2d, 1y (e.g., 30d30m)\n")
-		return b.String()
+		return renderPopupForm(m)
 	}
 
 	// Build filter panel
@@ -162,4 +145,109 @@ func setupTableStyles(tbl table.Model) table.Model {
 		Background(lipgloss.Color("57"))
 	tbl.SetStyles(s)
 	return tbl
+}
+
+func renderPopupForm(m model) string {
+	// Define styles
+	var (
+		borderColor    = lipgloss.Color("63")
+		focusedColor   = lipgloss.Color("228")
+		labelColor     = lipgloss.Color("241")
+		hintColor      = lipgloss.Color("245")
+
+		popupStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(borderColor).
+			Padding(1, 2).
+			Width(58)
+
+		titleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(focusedColor).
+			MarginBottom(1)
+
+		labelStyle = lipgloss.NewStyle().
+			Width(9).
+			Foreground(labelColor)
+
+		focusedLabelStyle = labelStyle.
+			Foreground(focusedColor).
+			Bold(true)
+
+		hintStyle = lipgloss.NewStyle().
+			Faint(true).
+			Foreground(hintColor)
+
+		helpStyle = lipgloss.NewStyle().
+			MarginTop(1)
+
+		divider = lipgloss.NewStyle().
+			Foreground(hintColor).
+			Render(strings.Repeat("─", 54))
+	)
+
+	// Build title
+	var title string
+	if m.editing {
+		title = "✏️  Edit Timer"
+	} else {
+		title = "➕️ Add Timer"
+	}
+
+	// Build form content
+	var b strings.Builder
+
+	// Title
+	b.WriteString(titleStyle.Render(title))
+	b.WriteString("\n")
+	b.WriteString(divider)
+	b.WriteString("\n\n")
+
+	// Name input - show focused label if name input is focused
+ nameLabel := "Name:"
+	if m.nameInput.Focused() {
+		nameLabel = focusedLabelStyle.Render(nameLabel)
+	} else {
+		nameLabel = labelStyle.Render(nameLabel)
+	}
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, nameLabel, " ", m.nameInput.View()))
+	b.WriteString("\n\n")
+
+	// Duration input
+	durationLabel := "Duration:"
+	if m.durationInput.Focused() {
+		durationLabel = focusedLabelStyle.Render(durationLabel)
+	} else {
+		durationLabel = labelStyle.Render(durationLabel)
+	}
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, durationLabel, " ", m.durationInput.View()))
+	b.WriteString("\n\n")
+
+	// Validation hint
+	b.WriteString(hintStyle.Render("Examples: 30s, 5m, 1h, 2d, 1y"))
+	b.WriteString("\n")
+
+	// Help text
+	b.WriteString(helpStyle.Render(m.help.View(m.formKeys)))
+
+	// Render popup and center it
+	popupContent := b.String()
+	popup := popupStyle.Render(popupContent)
+
+	// Center the popup on screen
+	width := m.width
+	height := m.height
+	if width == 0 {
+		width = 80
+	}
+	if height == 0 {
+		height = 24
+	}
+	return lipgloss.Place(
+		width,
+		height,
+		lipgloss.Center,
+		lipgloss.Center,
+		popup,
+	)
 }

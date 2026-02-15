@@ -1,21 +1,18 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 type tickMsg time.Time
 type fileWatchMsg struct{}
-
-type inputField struct {
-	label string
-	value string
-}
 
 type model struct {
 	timers []Timer
@@ -29,8 +26,8 @@ type model struct {
 	confirmingDelete bool // true when showing delete confirmation
 	confirmingBulk   bool // true when showing bulk operation confirmation
 	pendingBulkAction bulkActionType // which bulk action to execute
-	inputFields      []inputField
-	activeField      int
+	nameInput        textinput.Model
+	durationInput    textinput.Model
 
 	filter filterMode
 
@@ -40,6 +37,9 @@ type model struct {
 	formKeys    formKeyMap
 	confirmKeys confirmKeyMap
 	help        help.Model
+
+	width  int // terminal width
+	height int // terminal height
 }
 
 func (m model) Init() tea.Cmd {
@@ -75,14 +75,37 @@ func initialModel() model {
 	)
 	tbl = setupTableStyles(tbl)
 
+	// Initialize text inputs
+	nameInput := textinput.New()
+	nameInput.Placeholder = "Timer name"
+	nameInput.Focus()
+
+	durationInput := textinput.New()
+	durationInput.Placeholder = "30s, 5m, 1h, 2d, 1y"
+	durationInput.Validate = func(s string) error {
+		// Allow empty string during typing
+		if s == "" {
+			return nil
+		}
+		// Validate: only digits and s/m/h/d/y suffixes allowed
+		for _, r := range s {
+			if !((r >= '0' && r <= '9') || r == 's' || r == 'm' || r == 'h' || r == 'd' || r == 'y' || r == ' ') {
+				return fmt.Errorf("invalid duration format")
+			}
+		}
+		return nil
+	}
+
 	m := model{
-		now:         time.Now(),
-		filter:      filterAll,
-		defaultKeys: newDefaultKeyMap(),
-		formKeys:    newFormKeyMap(),
-		confirmKeys: newConfirmKeyMap(),
-		help:        help.New(),
-		table:       tbl,
+		now:           time.Now(),
+		filter:        filterAll,
+		defaultKeys:   newDefaultKeyMap(),
+		formKeys:      newFormKeyMap(),
+		confirmKeys:   newConfirmKeyMap(),
+		help:          help.New(),
+		table:         tbl,
+		nameInput:     nameInput,
+		durationInput: durationInput,
 	}
 
 	if s, err := loadFromFile(); err == nil {
