@@ -288,18 +288,12 @@ func renderPopupOverlay(m model) string {
 	popupHeight := len(popupLines)
 
 	// Calculate vertical position for popup (centered)
-	popupStartRow := (height - popupHeight) / 2
-	if popupStartRow < 0 {
-		popupStartRow = 0
-	}
+	popupStartRow := max(0, (height-popupHeight)/2)
 
 	// Calculate horizontal position for popup (centered)
 	// Popup width is 58 (from style) + borders (4) + padding (4) = ~66 chars
 	popupWidth := 66
-	popupStartCol := (width - popupWidth) / 2
-	if popupStartCol < 0 {
-		popupStartCol = 0
-	}
+	popupStartCol := max(0, (width-popupWidth)/2)
 	popupEndCol := popupStartCol + popupWidth
 
 	// Build the overlay view line by line

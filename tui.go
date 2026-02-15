@@ -11,8 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type tickMsg time.Time
-type fileWatchMsg struct{}
+type (
+	tickMsg      time.Time
+	fileWatchMsg struct{}
+)
 
 type model struct {
 	timers []Timer
@@ -20,14 +22,14 @@ type model struct {
 	cursor int
 	table  table.Model
 
-	adding           bool
-	editing          bool // true when editing existing timer
-	editingIndex     int  // actual index of timer being edited
-	confirmingDelete bool // true when showing delete confirmation
-	confirmingBulk   bool // true when showing bulk operation confirmation
+	adding            bool
+	editing           bool           // true when editing existing timer
+	editingIndex      int            // actual index of timer being edited
+	confirmingDelete  bool           // true when showing delete confirmation
+	confirmingBulk    bool           // true when showing bulk operation confirmation
 	pendingBulkAction bulkActionType // which bulk action to execute
-	nameInput        textinput.Model
-	durationInput    textinput.Model
+	nameInput         textinput.Model
+	durationInput     textinput.Model
 
 	filter filterMode
 
@@ -89,7 +91,7 @@ func initialModel() model {
 		}
 		// Validate: only digits and s/m/h/d/y suffixes allowed
 		for _, r := range s {
-			if !((r >= '0' && r <= '9') || r == 's' || r == 'm' || r == 'h' || r == 'd' || r == 'y' || r == ' ') {
+			if (r < '0' || r > '9') && r != 's' && r != 'm' && r != 'h' && r != 'd' && r != 'y' && r != ' ' {
 				return fmt.Errorf("invalid duration format")
 			}
 		}
