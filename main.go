@@ -63,6 +63,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 
+			case key.Matches(msg, m.formKeys.Increase):
+				if m.durationInput.Focused() {
+					current := m.durationInput.Value()
+					step := time.Duration(m.durationConfig.IncrementStep)
+					delta := step * getUnitMultiplier(m.durationConfig.Unit, current)
+					newValue := adjustDuration(current, delta, m.durationConfig)
+					m.durationInput.SetValue(newValue)
+				}
+				return m, nil
+
+			case key.Matches(msg, m.formKeys.Decrease):
+				if m.durationInput.Focused() {
+					current := m.durationInput.Value()
+					step := time.Duration(m.durationConfig.IncrementStep)
+					delta := step * getUnitMultiplier(m.durationConfig.Unit, current)
+					newValue := adjustDuration(current, -delta, m.durationConfig)
+					m.durationInput.SetValue(newValue)
+				}
+				return m, nil
+
 			case msg.String() == "enter":
 				// Validate and submit
 				name := m.nameInput.Value()

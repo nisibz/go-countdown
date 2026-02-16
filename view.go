@@ -227,7 +227,7 @@ func renderPopupForm(m model) string {
 	b.WriteString("\n\n")
 
 	// Validation hint
-	b.WriteString(hintStyle.Render("Examples: 30s, 5m, 1h, 2d, 1y"))
+	b.WriteString(hintStyle.Render("Examples: 30s, 5m, 1h | +/- to adjust"))
 	b.WriteString("\n")
 
 	// Help text

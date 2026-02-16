@@ -44,6 +44,9 @@ type model struct {
 	nameInput         textinput.Model
 	durationInput     textinput.Model
 
+	// Duration adjustment config
+	durationConfig DurationAdjustConfig
+
 	// Persistence
 	dirty       bool
 	lastModTime time.Time // track file modification time for external changes
@@ -113,17 +116,24 @@ func initialModel() model {
 		return nil
 	}
 
+	// Load duration adjustment config
+	cfg, err := loadConfig()
+	if err != nil {
+		cfg = defaultConfig()
+	}
+
 	m := model{
-		now:         time.Now(),
-		filter:      filterAll,
-		state:       stateDefault,
-		defaultKeys: newDefaultKeyMap(),
-		formKeys:    newFormKeyMap(),
-		confirmKeys: newConfirmKeyMap(),
-		help:        help.New(),
-		table:       tbl,
-		nameInput:   nameInput,
-		durationInput: durationInput,
+		now:            time.Now(),
+		filter:         filterAll,
+		state:          stateDefault,
+		defaultKeys:    newDefaultKeyMap(),
+		formKeys:       newFormKeyMap(),
+		confirmKeys:    newConfirmKeyMap(),
+		help:           help.New(),
+		table:          tbl,
+		nameInput:      nameInput,
+		durationInput:  durationInput,
+		durationConfig: cfg,
 	}
 
 	if s, err := loadFromFile(); err == nil {

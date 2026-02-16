@@ -147,6 +147,8 @@ type formKeyMap struct {
 	Enter     key.Binding
 	Esc       key.Binding
 	Help      key.Binding
+	Increase  key.Binding // + or = key
+	Decrease  key.Binding // - or _ key
 }
 
 // ShortHelp returns keybindings for the mini help view
@@ -158,6 +160,7 @@ func (k formKeyMap) ShortHelp() []key.Binding {
 func (k formKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.NextField, k.PrevField},
+		{k.Increase, k.Decrease},
 		{k.Enter, k.Esc},
 	}
 }
@@ -171,6 +174,14 @@ func newFormKeyMap() formKeyMap {
 		PrevField: key.NewBinding(
 			key.WithKeys("shift+tab", "up"),
 			key.WithHelp("↑/shift+tab", "prev field"),
+		),
+		Increase: key.NewBinding(
+			key.WithKeys("+", "="),
+			key.WithHelp("+/=", "increase duration"),
+		),
+		Decrease: key.NewBinding(
+			key.WithKeys("-", "_"),
+			key.WithHelp("-/_", "decrease duration"),
 		),
 		Enter: key.NewBinding(
 			key.WithKeys("enter"),
