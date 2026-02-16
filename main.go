@@ -40,9 +40,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Handle form input with textinput components
 			var cmd tea.Cmd
 
-			switch msg.String() {
-			case "tab", "shift+tab":
-				// Toggle focus between name and duration inputs
+			switch {
+			case key.Matches(msg, m.formKeys.NextField):
+				// Move to next field (tab or down arrow)
 				if m.nameInput.Focused() {
 					m.nameInput.Blur()
 					m.durationInput.Focus()
@@ -52,7 +52,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 
-			case "enter":
+			case key.Matches(msg, m.formKeys.PrevField):
+				// Move to previous field (shift+tab or up arrow)
+				if m.nameInput.Focused() {
+					m.nameInput.Blur()
+					m.durationInput.Focus()
+				} else {
+					m.durationInput.Blur()
+					m.nameInput.Focus()
+				}
+				return m, nil
+
+			case msg.String() == "enter":
 				// Validate and submit
 				name := m.nameInput.Value()
 				durationStr := m.durationInput.Value()
@@ -95,7 +106,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.nameInput.Focus()
 				return m, tick()
 
-			case "esc":
+			case msg.String() == "esc":
 				// Cancel and close form
 				m.state = stateDefault
 				m.nameInput.Reset()
