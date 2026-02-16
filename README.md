@@ -109,9 +109,7 @@ When adding or editing a timer, use the `+` and `-` keys to quickly adjust the d
 The +/- key behavior can be customized via a configuration file.
 
 **Config Location**:
-- **macOS**: `~/Library/Application Support/go-countdown/config.json`
-- **Linux**: `~/.config/go-countdown/config.json`
-- **Windows**: `%AppData%\go-countdown\config.json`
+- **All platforms**: `~/.config/go-countdown/config.json`
 
 The config file is automatically created with defaults on first run:
 

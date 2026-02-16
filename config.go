@@ -28,11 +28,12 @@ type DurationAdjustConfig struct {
 var configFile string
 
 func init() {
-	configDir, err := os.UserConfigDir()
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		configDir = "."
+		configFile = "config.json"
+	} else {
+		configFile = filepath.Join(homeDir, ".config", "go-countdown", "config.json")
 	}
-	configFile = filepath.Join(configDir, "go-countdown", "config.json")
 }
 
 func defaultConfig() DurationAdjustConfig {

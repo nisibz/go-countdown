@@ -9,11 +9,12 @@ import (
 var saveFile string
 
 func init() {
-	configDir, err := os.UserConfigDir()
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		configDir = "."
+		saveFile = "timers.json"
+	} else {
+		saveFile = filepath.Join(homeDir, ".config", "go-countdown", "timers.json")
 	}
-	saveFile = filepath.Join(configDir, "go-countdown", "timers.json")
 }
 
 type saveData struct {
